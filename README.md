@@ -13,7 +13,8 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 - Classic BT device name mirrors the BLE controller name (e.g. `StadiaMXPB-d2ea Classic`)
 - Name and BLE device address persist across reboots; updated automatically when a new controller is paired
 - Requests minimum BLE connection interval (7.5 ms) for lowest latency
-- HID reports forwarded inline in the HIDH event callback — no intermediate queue or task hop
+- HID reports forwarded via a dedicated task with configurable rate cap (default 20 ms / 50 Hz) to prevent BTA/L2CAP overflow on hosts that poll Classic BT infrequently
+- Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
 - Supports any BLE HID device (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
 
@@ -48,6 +49,9 @@ Relevant options are under **BT HID Bridge Configuration**:
 |--------|---------|-------------|
 | `BRIDGE_PEER_DEVICE_NAME` | *(empty)* | Connect only to a BLE device with this exact advertised name. Leave empty to connect to the first HID device found. |
 | `BRIDGE_BT_DEVICE_NAME` | `ESP32 HID Bridge` | Fallback Classic BT name used when the BLE device has no advertised name. |
+| `BRIDGE_FORWARD_INTERVAL_MS` | `20` | Minimum interval between HID report forwards to the Classic BT host (ms). Reports arriving faster are coalesced; only the latest is sent. 20 ms = 50 Hz. |
+| `BRIDGE_AUTO_RECONNECT` | enabled | Automatically restart scanning and reconnect after the BLE controller disconnects. |
+| `BRIDGE_LOG_AXES` | disabled | Log analog axis values (LX/LY/RX/RY) on every changed report. Useful for debugging stuck controls. |
 | `EXAMPLE_SSP_ENABLED` | enabled | Use Secure Simple Pairing for Classic BT. Disable to fall back to legacy PIN pairing. |
 
 ### Build
@@ -105,11 +109,12 @@ scan_task                               bt_hidd_callback
 ble_hidh_callback
   OPEN  → request 7.5 ms BLE interval
          start_classic_bt_hid()
-  INPUT → esp_hidd_dev_input_set()  ──►  (delivered to Classic BT host)
-  CLOSE → esp_hidd_dev_deinit()
+  INPUT → xQueueOverwrite(report) ──►  hid_forward_task
+  CLOSE → esp_hidd_dev_deinit()          sleep(FORWARD_INTERVAL_MS)
+                                         xQueueReceive() → esp_hidd_dev_input_set()
 ```
 
-HID reports are forwarded directly inside the `ESP_HIDH_INPUT_EVENT` callback with no intermediate queue or task wakeup, keeping end-to-end latency minimal.
+The HIDH event callback never blocks — it writes the latest report into a depth-1 queue via `xQueueOverwrite` and returns immediately. A dedicated `hid_forward_task` wakes every `FORWARD_INTERVAL_MS`, dequeues the most recent report, and calls `esp_hidd_dev_input_set`. This prevents the Bluedroid BTC task queue from backing up when the Classic BT host polls infrequently, which would otherwise cause BLE GATT notification queue overflow and dropped reports (resulting in analog sticks freezing at their last reported position).
 
 NVS namespace `bthid_bridge` stores:
 

@@ -27,4 +27,20 @@ menu "BT HID Bridge Configuration"
         help
             When the BLE HID device disconnects, automatically restart
             scanning and reconnect.
+
+    config BRIDGE_FORWARD_INTERVAL_MS
+        int "Classic BT HID forward interval (ms)"
+        default 20
+        range 5 100
+        help
+            Minimum interval between HID report forwards to the Classic BT host.
+            Reports arriving faster than this are coalesced; only the latest is sent.
+            20ms = 50Hz, suitable for hosts that poll Classic BT at ~50Hz (e.g. Tesla).
+
+    config BRIDGE_LOG_AXES
+        bool "Log analog axis values on change"
+        default n
+        help
+            Log LX/LY/RX/RY axis values whenever the HID report changes.
+            Useful for debugging stuck controls; disable in production.
 endmenu

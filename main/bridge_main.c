@@ -12,6 +12,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include "esp_timer.h"
 
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -40,6 +42,7 @@ static const char *TAG = "BT_HID_BRIDGE";
 #define NVS_KEY_BT_NAME  "bt_name"
 #define NVS_KEY_BT_HOST  "bt_host"
 #define BT_NAME_MAX_LEN  64
+#define FORWARD_INTERVAL_MS CONFIG_BRIDGE_FORWARD_INTERVAL_MS
 
 typedef struct {
     uint8_t bda[6];
@@ -65,6 +68,15 @@ static axis_info_t        s_axis_lx = { .report_id = -1 }; /* Left  stick X  (Us
 static axis_info_t        s_axis_ly = { .report_id = -1 }; /* Left  stick Y  (Usage 0x31) */
 static axis_info_t        s_axis_rx = { .report_id = -1 }; /* Right stick Z  (Usage 0x32) */
 static axis_info_t        s_axis_ry = { .report_id = -1 }; /* Right stick Rz (Usage 0x35) */
+
+typedef struct {
+    uint8_t  data[MAX_REPORT_LEN];
+    uint16_t len;
+    size_t   map_index;
+    uint8_t  report_id;
+} hid_report_t;
+
+static QueueHandle_t s_report_queue = NULL;
 
 static esp_err_t nvs_save_ble_device(const esp_bd_addr_t bda, esp_ble_addr_type_t addr_type)
 {
@@ -220,6 +232,7 @@ static void find_axes_in_map(const uint8_t *map, size_t len)
     }
 }
 
+#if CONFIG_BRIDGE_LOG_AXES
 static void log_axes_if_changed(uint8_t report_id, const uint8_t *data, uint16_t len)
 {
     static uint8_t  s_prev[MAX_REPORT_LEN];
@@ -237,6 +250,7 @@ static void log_axes_if_changed(uint8_t report_id, const uint8_t *data, uint16_t
     int32_t ry = (s_axis_ry.report_id == report_id) ? read_axis(data, len, &s_axis_ry) : -1;
     ESP_LOGI(TAG, "Axes id=%u LX=%d LY=%d RX=%d RY=%d", report_id, lx, ly, rx, ry);
 }
+#endif
 
 static void free_report_maps(void)
 {
@@ -439,9 +453,15 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         }
         uint16_t len = param->input.length > MAX_REPORT_LEN
                        ? MAX_REPORT_LEN : param->input.length;
+#if CONFIG_BRIDGE_LOG_AXES
         log_axes_if_changed(param->input.report_id, param->input.data, len);
-        esp_hidd_dev_input_set(s_bt_hid_dev, param->input.map_index,
-                               param->input.report_id, param->input.data, len);
+#endif
+        hid_report_t report;
+        report.len       = len;
+        report.map_index = param->input.map_index;
+        report.report_id = param->input.report_id;
+        memcpy(report.data, param->input.data, len);
+        xQueueOverwrite(s_report_queue, &report);
         break;
     }
 
@@ -469,6 +489,21 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     }
 }
 
+
+static void hid_forward_task(void *pvParameters)
+{
+    hid_report_t report;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(FORWARD_INTERVAL_MS));
+        if (xQueueReceive(s_report_queue, &report, 0) != pdTRUE) continue;
+        if (!s_bt_connected || !s_bt_hid_dev) continue;
+        esp_err_t err = esp_hidd_dev_input_set(s_bt_hid_dev, report.map_index,
+                                               report.report_id, report.data, report.len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "input_set failed: id=%u err=0x%x", report.report_id, err);
+        }
+    }
+}
 
 static void scan_task(void *pvParameters)
 {
@@ -606,6 +641,8 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_hidh_init(&hidh_config));
 
+    s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
+    xTaskCreate(hid_forward_task, "hid_fwd", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
     xTaskCreate(scan_task, "scan", 6144, NULL, configMAX_PRIORITIES - 3, NULL);
 
     ESP_LOGI(TAG, "Bridge ready. Peer filter: \"%s\"",
