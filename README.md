@@ -20,7 +20,7 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 
 ## Requirements
 
-- **Hardware**: ESP32 with dual-mode Bluetooth (WROOM, WROVER, or equivalent). Classic Bluetooth is only available on the original ESP32 — ESP32-S3, C3, C6, H2 are not supported.
+- **Hardware**: ESP32 with dual-mode Bluetooth (WROOM, WROVER, or equivalent). Classic Bluetooth is only available on the original ESP32. Note: ESP32-S3, C3, C6, H2 are not supported.
 - **Toolchain**: ESP-IDF v6.0.1
 
 ## Setup
