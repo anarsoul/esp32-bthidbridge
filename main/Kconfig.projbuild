@@ -1,0 +1,30 @@
+menu "BT HID Bridge Configuration"
+    config EXAMPLE_SSP_ENABLED
+        bool "Secure Simple Pairing"
+        depends on BT_CLASSIC_ENABLED
+        default y
+        help
+            Enable Secure Simple Pairing for Classic BT connections.
+            Disable to fall back to legacy pairing with PIN code.
+
+    config BRIDGE_PEER_DEVICE_NAME
+        string "BLE HID device name filter"
+        default ""
+        help
+            If set, only connect to a BLE HID device whose advertised name
+            matches this string exactly. Leave empty to connect to the first
+            BLE HID device found during scanning.
+
+    config BRIDGE_BT_DEVICE_NAME
+        string "Classic BT device name advertised to host"
+        default "ESP32 HID Bridge"
+        help
+            The name the bridge presents when discoverable over Classic BT.
+
+    config BRIDGE_AUTO_RECONNECT
+        bool "Reconnect to BLE device after disconnect"
+        default y
+        help
+            When the BLE HID device disconnects, automatically restart
+            scanning and reconnect.
+endmenu
