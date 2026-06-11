@@ -78,6 +78,12 @@ Press `Ctrl-]` to exit the monitor.
 
 ## Usage
 
+### Web flasher
+
+The easiest way to flash the ESP32 is via the [web installer](https://anarsoul.github.io/esp32-bthidbridge/) in Chrome — no toolchain required.
+
+Before flashing, put the ESP32 into boot mode: press and hold the **BOOT** button, press and release **RESET**, then release **BOOT**.
+
 ### First pairing
 
 1. Flash the firmware and power on the ESP32.
