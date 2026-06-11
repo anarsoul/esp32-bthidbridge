@@ -54,26 +54,25 @@ jobs:
             firmware/partition-table.bin
             firmware/bthidbridge.bin
 
-      - name: Generate manifest.json
+      - name: Generate manifest.json and stage binaries
         run: |
           TAG=${{ github.ref_name }}
           VERSION=${TAG#v}
-          BASE="https://github.com/anarsoul/esp32-bthidbridge/releases/download/$TAG"
+          cp firmware/bootloader.bin docs/
+          cp firmware/partition-table.bin docs/
+          cp firmware/bthidbridge.bin docs/
           jq -n \
             --arg name "ESP32 BT HID Bridge" \
             --arg version "$VERSION" \
-            --arg bootloader "$BASE/bootloader.bin" \
-            --arg partitions "$BASE/partition-table.bin" \
-            --arg app "$BASE/bthidbridge.bin" \
             '{
               name: $name,
               version: $version,
               builds: [{
                 chipFamily: "ESP32",
                 parts: [
-                  {path: $bootloader, offset: 4096},
-                  {path: $partitions, offset: 32768},
-                  {path: $app,        offset: 65536}
+                  {path: "bootloader.bin",     offset: 4096},
+                  {path: "partition-table.bin", offset: 32768},
+                  {path: "bthidbridge.bin",     offset: 65536}
                 ]
               }]
             }' > docs/manifest.json
