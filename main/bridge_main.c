@@ -27,21 +27,26 @@
 #include "esp_hidh.h"
 #include "esp_hidd.h"
 #include "esp_hid_gap.h"
+#include "esp_hidd_api.h"
+#include "esp_gap_bt_api.h"
 
 static const char *TAG = "BT_HID_BRIDGE";
 
 #define SCAN_DURATION_SECONDS 5
 #define MAX_REPORT_LEN        64
 
-#define NVS_NAMESPACE   "bthid_bridge"
-#define NVS_KEY_BLE_DEV "ble_dev"
-#define NVS_KEY_BT_NAME "bt_name"
-#define BT_NAME_MAX_LEN 64
+#define NVS_NAMESPACE    "bthid_bridge"
+#define NVS_KEY_BLE_DEV  "ble_dev"
+#define NVS_KEY_BT_NAME  "bt_name"
+#define NVS_KEY_BT_HOST  "bt_host"
+#define BT_NAME_MAX_LEN  64
 
 typedef struct {
     uint8_t bda[6];
     uint8_t addr_type;
 } __attribute__((packed)) nvs_ble_dev_t;
+
+static void page_bonded_hosts(void); /* forward declaration */
 
 static esp_hidd_dev_t    *s_bt_hid_dev          = NULL;
 static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name, persists across reconnects */
@@ -89,6 +94,29 @@ static esp_err_t nvs_load_bt_name(char *name, size_t max_len)
     return ret;
 }
 
+static esp_err_t nvs_save_bt_host(const esp_bd_addr_t bda)
+{
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (ret == ESP_OK) {
+        ret = nvs_set_blob(h, NVS_KEY_BT_HOST, bda, sizeof(esp_bd_addr_t));
+        if (ret == ESP_OK) ret = nvs_commit(h);
+        nvs_close(h);
+    }
+    return ret;
+}
+
+static esp_err_t nvs_load_bt_host(esp_bd_addr_t bda)
+{
+    size_t len = sizeof(esp_bd_addr_t);
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
+    if (ret != ESP_OK) return ret;
+    ret = nvs_get_blob(h, NVS_KEY_BT_HOST, bda, &len);
+    nvs_close(h);
+    return ret;
+}
+
 static esp_err_t nvs_load_ble_device(esp_bd_addr_t bda, esp_ble_addr_type_t *addr_type)
 {
     nvs_ble_dev_t dev;
@@ -131,6 +159,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         if (param->start.status == ESP_OK) {
             ESP_LOGI(TAG, "Classic BT HID started — making discoverable");
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            page_bonded_hosts();
         } else {
             ESP_LOGE(TAG, "Classic BT HID start failed: %d", param->start.status);
         }
@@ -138,7 +167,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDD_CONNECT_EVENT:
         if (param->connect.status == ESP_OK) {
             ESP_LOGI(TAG, "Classic BT host connected");
-            esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
             s_bt_connected = true;
         } else {
             ESP_LOGE(TAG, "Classic BT connect failed: %d", param->connect.status);
@@ -147,9 +176,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDD_DISCONNECT_EVENT:
         ESP_LOGI(TAG, "Classic BT host disconnected");
         s_bt_connected = false;
-        if (s_ble_connected) {
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        }
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         break;
     case ESP_HIDD_STOP_EVENT:
         ESP_LOGI(TAG, "Classic BT HID stopped");
@@ -159,8 +186,40 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     }
 }
 
+static void page_bonded_hosts(void)
+{
+    esp_bd_addr_t host_bda;
+    if (nvs_load_bt_host(host_bda) == ESP_OK) {
+        ESP_LOGI(TAG, "Paging last host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(host_bda));
+        esp_bt_hid_device_connect(host_bda);
+        return;
+    }
+    /* No cached host yet — fall back to first bonded device */
+    int bond_num = esp_bt_gap_get_bond_device_num();
+    if (bond_num <= 0) return;
+    esp_bd_addr_t *bond_list = malloc(bond_num * sizeof(esp_bd_addr_t));
+    if (bond_list && esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
+        ESP_LOGI(TAG, "Paging first bonded host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bond_list[0]));
+        esp_bt_hid_device_connect(bond_list[0]);
+    }
+    free(bond_list);
+}
+
+static void on_bt_acl_connect(const esp_bd_addr_t bda)
+{
+    ESP_LOGI(TAG, "Classic BT ACL connected: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
+    nvs_save_bt_host(bda);
+}
+
 static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
 {
+    if (s_bt_hid_dev != NULL) {
+        /* Classic BT HID already running — page the host to reconnect */
+        ESP_LOGI(TAG, "Classic BT HID already initialized, paging host");
+        page_bonded_hosts();
+        return;
+    }
+
     size_t num_maps = 0;
     esp_hid_raw_report_map_t *maps = NULL;
 
@@ -278,19 +337,21 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     }
 
     case ESP_HIDH_CLOSE_EVENT: {
+        if (!param->close.dev) {
+            ESP_LOGW(TAG, "BLE HID close with NULL dev");
+            s_ble_connected  = false;
+            s_ble_connecting = false;
+            break;
+        }
         const uint8_t *bda = esp_hidh_dev_bda_get(param->close.dev);
         ESP_LOGI(TAG, "BLE HID closed: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
         esp_hidh_dev_free(param->close.dev);
-
         s_ble_connected  = false;
         s_ble_connecting = false;
-        s_bt_connected   = false;
-
-        if (s_bt_hid_dev) {
-            esp_hidd_dev_deinit(s_bt_hid_dev);
-            s_bt_hid_dev = NULL;
+        if (s_bt_connected) {
+            ESP_LOGI(TAG, "BLE lost — disconnecting Classic BT host");
+            esp_bt_hid_device_disconnect();
         }
-        free_report_maps();
         break;
     }
 
@@ -406,6 +467,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initializing BT stack (BTDM)");
     ESP_ERROR_CHECK(esp_hid_gap_init(HID_BRIDGE_MODE));
+    esp_hid_gap_set_bt_acl_conn_cb(on_bt_acl_connect);
 
     /* Restore the BT Classic device name immediately so it is correct even
      * before BLE connects (e.g. during the 30-second cached-device window). */

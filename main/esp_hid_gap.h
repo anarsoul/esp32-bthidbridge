@@ -83,6 +83,9 @@ void print_uuid(esp_bt_uuid_t *uuid);
 esp_err_t esp_hid_gap_init(uint8_t mode);
 esp_err_t esp_hid_gap_deinit(void);
 
+typedef void (*esp_hid_bt_acl_conn_cb_t)(const esp_bd_addr_t bda);
+void esp_hid_gap_set_bt_acl_conn_cb(esp_hid_bt_acl_conn_cb_t cb);
+
 esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name);
 esp_err_t esp_hid_ble_gap_adv_start(void);
 
