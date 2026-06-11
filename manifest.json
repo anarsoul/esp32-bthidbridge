@@ -6,15 +6,15 @@
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "https://github.com/anarsoul/esp32-bthidbridge/releases/download/v0.0.1/bootloader.bin",
+          "path": "bootloader.bin",
           "offset": 4096
         },
         {
-          "path": "https://github.com/anarsoul/esp32-bthidbridge/releases/download/v0.0.1/partition-table.bin",
+          "path": "partition-table.bin",
           "offset": 32768
         },
         {
-          "path": "https://github.com/anarsoul/esp32-bthidbridge/releases/download/v0.0.1/bthidbridge.bin",
+          "path": "bthidbridge.bin",
           "offset": 65536
         }
       ]
