@@ -48,6 +48,12 @@ typedef struct {
 
 static void page_bonded_hosts(void); /* forward declaration */
 
+typedef struct {
+    int16_t  report_id;  /* -1 = not found */
+    uint16_t bit_offset;
+    uint8_t  bit_size;
+} axis_info_t;
+
 static esp_hidd_dev_t    *s_bt_hid_dev          = NULL;
 static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name, persists across reconnects */
 static volatile bool      s_bt_connected         = false;
@@ -55,6 +61,10 @@ static volatile bool      s_ble_connected        = false;
 static volatile bool      s_ble_connecting       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
+static axis_info_t        s_axis_lx = { .report_id = -1 }; /* Left  stick X  (Usage 0x30) */
+static axis_info_t        s_axis_ly = { .report_id = -1 }; /* Left  stick Y  (Usage 0x31) */
+static axis_info_t        s_axis_rx = { .report_id = -1 }; /* Right stick Z  (Usage 0x32) */
+static axis_info_t        s_axis_ry = { .report_id = -1 }; /* Right stick Rz (Usage 0x35) */
 
 static esp_err_t nvs_save_ble_device(const esp_bd_addr_t bda, esp_ble_addr_type_t addr_type)
 {
@@ -133,6 +143,99 @@ static esp_err_t nvs_load_ble_device(esp_bd_addr_t bda, esp_ble_addr_type_t *add
         *addr_type = (esp_ble_addr_type_t)dev.addr_type;
     }
     return ret;
+}
+
+static int32_t read_axis(const uint8_t *data, uint16_t data_len, const axis_info_t *ax)
+{
+    uint32_t val = 0;
+    for (uint8_t b = 0; b < ax->bit_size; b++) {
+        uint16_t byte_idx = (ax->bit_offset + b) / 8;
+        uint8_t  bit_idx  = (ax->bit_offset + b) % 8;
+        if (byte_idx < data_len && ((data[byte_idx] >> bit_idx) & 1))
+            val |= (1u << b);
+    }
+    return (int32_t)val;
+}
+
+/* Walk the HID descriptor and record bit-positions for X/Y/Z/Rz axes. */
+static void find_axes_in_map(const uint8_t *map, size_t len)
+{
+    uint32_t usage_page = 0, report_size = 0, report_count = 0, report_id = 0;
+    uint32_t usages[64], usage_min = 0, usage_max = 0, usage_count = 0;
+    bool     use_range = false;
+    uint32_t bit_offsets[32] = {0};
+
+    size_t i = 0;
+    while (i < len) {
+        uint8_t b = map[i];
+        if (b == 0xFE) { if (i + 1 >= len) break; i += 3 + map[i + 1]; continue; }
+        uint8_t  btag  = (b >> 4) & 0x0F;
+        uint8_t  btype = (b >> 2) & 0x03;
+        uint32_t dlen  = (uint32_t)(b & 0x03); if (dlen == 3) dlen = 4;
+        uint32_t uval  = 0;
+        for (uint32_t k = 0; k < dlen && (i + 1 + k) < len; k++)
+            uval |= (uint32_t)map[i + 1 + k] << (8 * k);
+
+        switch (btype) {
+        case 1:
+            switch (btag) {
+            case 0: usage_page   = uval; break;
+            case 7: report_size  = uval; break;
+            case 8: report_id    = uval; break;
+            case 9: report_count = uval; break;
+            }
+            break;
+        case 2:
+            switch (btag) {
+            case 0: if (usage_count < 64) usages[usage_count++] = uval; use_range = false; break;
+            case 1: usage_min = uval; use_range = true;  break;
+            case 2: usage_max = uval;                    break;
+            }
+            break;
+        case 0:
+            if (btag == 8 && report_id < 32) {
+                uint32_t bo = bit_offsets[report_id];
+                for (uint32_t f = 0; f < report_count; f++) {
+                    uint32_t usage = use_range
+                        ? (f <= usage_max - usage_min ? usage_min + f : 0)
+                        : (f < usage_count ? usages[f] : 0);
+                    if (usage_page == 0x01) {
+                        axis_info_t info = { .report_id = (int16_t)report_id,
+                                             .bit_offset = (uint16_t)bo,
+                                             .bit_size   = (uint8_t)report_size };
+                        if (usage == 0x30) { s_axis_lx = info; ESP_LOGI(TAG, "Axis LX: report %u bit %u size %u", report_id, bo, report_size); }
+                        if (usage == 0x31) { s_axis_ly = info; ESP_LOGI(TAG, "Axis LY: report %u bit %u size %u", report_id, bo, report_size); }
+                        if (usage == 0x32) { s_axis_rx = info; ESP_LOGI(TAG, "Axis RX: report %u bit %u size %u", report_id, bo, report_size); }
+                        if (usage == 0x35) { s_axis_ry = info; ESP_LOGI(TAG, "Axis RY: report %u bit %u size %u", report_id, bo, report_size); }
+                    }
+                    bo += report_size;
+                }
+                bit_offsets[report_id] = bo;
+            }
+            usage_count = 0; use_range = false;
+            memset(usages, 0, sizeof(usages));
+            break;
+        }
+        i += 1 + dlen;
+    }
+}
+
+static void log_axes_if_changed(uint8_t report_id, const uint8_t *data, uint16_t len)
+{
+    static uint8_t  s_prev[MAX_REPORT_LEN];
+    static uint16_t s_prev_len = 0;
+
+    if (len == s_prev_len && memcmp(data, s_prev, len) == 0) return;
+    memcpy(s_prev, data, len);
+    s_prev_len = len;
+
+    if (s_axis_lx.report_id != report_id && s_axis_rx.report_id != report_id) return;
+
+    int32_t lx = (s_axis_lx.report_id == report_id) ? read_axis(data, len, &s_axis_lx) : -1;
+    int32_t ly = (s_axis_ly.report_id == report_id) ? read_axis(data, len, &s_axis_ly) : -1;
+    int32_t rx = (s_axis_rx.report_id == report_id) ? read_axis(data, len, &s_axis_rx) : -1;
+    int32_t ry = (s_axis_ry.report_id == report_id) ? read_axis(data, len, &s_axis_ry) : -1;
+    ESP_LOGI(TAG, "Axes id=%u LX=%d LY=%d RX=%d RY=%d", report_id, lx, ly, rx, ry);
 }
 
 static void free_report_maps(void)
@@ -249,6 +352,11 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     }
     s_report_maps_len = num_maps;
 
+    s_axis_lx.report_id = s_axis_ly.report_id = -1;
+    s_axis_rx.report_id = s_axis_ry.report_id = -1;
+    for (size_t i = 0; i < s_report_maps_len; i++)
+        find_axes_in_map(s_report_maps[i].data, s_report_maps[i].len);
+
     uint16_t vid = esp_hidh_dev_vendor_id_get(ble_dev);
     uint16_t pid = esp_hidh_dev_product_id_get(ble_dev);
     uint16_t ver = esp_hidh_dev_version_get(ble_dev);
@@ -331,6 +439,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         }
         uint16_t len = param->input.length > MAX_REPORT_LEN
                        ? MAX_REPORT_LEN : param->input.length;
+        log_axes_if_changed(param->input.report_id, param->input.data, len);
         esp_hidd_dev_input_set(s_bt_hid_dev, param->input.map_index,
                                param->input.report_id, param->input.data, len);
         break;
