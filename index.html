@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 BT HID Bridge — Web Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools/dist/web/install-button.js?module"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 3em auto;
+      padding: 0 1.5em;
+      color: #222;
+    }
+    h1 { font-size: 1.6em; }
+    esp-web-install-button { display: block; margin: 2em 0; }
+    .note { font-size: 0.9em; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>ESP32 BT HID Bridge</h1>
+  <p>
+    Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth host
+    such as a PC, gaming console, or car head unit.
+  </p>
+  <p>Connect your ESP32 via USB, then click <strong>Install</strong>.</p>
+  <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+  <p class="note">
+    Requires Chrome or Edge on desktop. Does not work on Firefox or mobile browsers.<br>
+    Source code and documentation on <a href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>.
+  </p>
+</body>
+</html>
