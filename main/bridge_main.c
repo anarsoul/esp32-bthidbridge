@@ -67,10 +67,12 @@ static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
+#if CONFIG_BRIDGE_LOG_AXES
 static axis_info_t        s_axis_lx = { .report_id = -1 }; /* Left  stick X  (Usage 0x30) */
 static axis_info_t        s_axis_ly = { .report_id = -1 }; /* Left  stick Y  (Usage 0x31) */
 static axis_info_t        s_axis_rx = { .report_id = -1 }; /* Right stick Z  (Usage 0x32) */
 static axis_info_t        s_axis_ry = { .report_id = -1 }; /* Right stick Rz (Usage 0x35) */
+#endif
 
 typedef struct {
     uint8_t  data[MAX_REPORT_LEN];
@@ -160,6 +162,7 @@ static esp_err_t nvs_load_ble_device(esp_bd_addr_t bda, esp_ble_addr_type_t *add
     return ret;
 }
 
+#if CONFIG_BRIDGE_LOG_AXES
 /* Walk the HID descriptor and record bit-positions for X/Y/Z/Rz axes. */
 static void find_axes_in_map(const uint8_t *map, size_t len)
 {
@@ -223,7 +226,6 @@ static void find_axes_in_map(const uint8_t *map, size_t len)
     }
 }
 
-#if CONFIG_BRIDGE_LOG_AXES
 static int32_t read_axis(const uint8_t *data, uint16_t data_len, const axis_info_t *ax)
 {
     uint32_t val = 0;
@@ -332,8 +334,12 @@ static void page_bonded_hosts(void)
     /* No cached host yet — fall back to first bonded device */
     int bond_num = esp_bt_gap_get_bond_device_num();
     if (bond_num <= 0) return;
-    esp_bd_addr_t *bond_list = malloc(bond_num * sizeof(esp_bd_addr_t));
-    if (bond_list && esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
+    esp_bd_addr_t *bond_list = calloc(bond_num, sizeof(esp_bd_addr_t));
+    if (!bond_list) {
+        ESP_LOGE(TAG, "OOM listing bonded devices");
+        return;
+    }
+    if (esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
         ESP_LOGI(TAG, "Paging first bonded host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bond_list[0]));
         esp_bt_hid_device_connect(bond_list[0]);
     }
@@ -384,10 +390,12 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     }
     s_report_maps_len = num_maps;
 
+#if CONFIG_BRIDGE_LOG_AXES
     s_axis_lx.report_id = s_axis_ly.report_id = -1;
     s_axis_rx.report_id = s_axis_ry.report_id = -1;
     for (size_t i = 0; i < s_report_maps_len; i++)
         find_axes_in_map(s_report_maps[i].data, s_report_maps[i].len);
+#endif
 
     uint16_t vid = esp_hidh_dev_vendor_id_get(ble_dev);
     uint16_t pid = esp_hidh_dev_product_id_get(ble_dev);
@@ -619,9 +627,20 @@ static void bt_reconnect_task(void *pvParameters)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (!s_bt_connected && s_host_connected_this_boot && s_ble_connected) {
+        if (s_bt_connected || !s_ble_connected) {
+            continue;
+        }
+        if (s_host_connected_this_boot) {
+            /* Reconnect mode: host was seen this boot, retry unconditionally */
             ESP_LOGI(TAG, "Classic BT host not connected — retrying page");
             page_bonded_hosts();
+        } else {
+            /* Pairing mode: only retry if there is a cached host to try */
+            esp_bd_addr_t host_bda;
+            if (nvs_load_bt_host(host_bda) == ESP_OK) {
+                ESP_LOGI(TAG, "Classic BT host not connected — retrying cached host");
+                page_bonded_hosts();
+            }
         }
     }
 }
