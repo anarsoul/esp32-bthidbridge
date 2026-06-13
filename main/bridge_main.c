@@ -62,6 +62,8 @@ static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name,
 static volatile bool      s_bt_connected         = false;
 static volatile bool      s_ble_connected        = false;
 static volatile bool      s_ble_connecting       = false;
+static volatile bool      s_controller_connected_this_boot = false;
+static volatile bool      s_host_connected_this_boot       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
 static axis_info_t        s_axis_lx = { .report_id = -1 }; /* Left  stick X  (Usage 0x30) */
@@ -274,8 +276,12 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     switch (event) {
     case ESP_HIDD_START_EVENT:
         if (param->start.status == ESP_OK) {
-            ESP_LOGI(TAG, "Classic BT HID started — making discoverable");
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            if (!s_host_connected_this_boot) {
+                ESP_LOGI(TAG, "Classic BT HID started — making discoverable");
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            } else {
+                ESP_LOGI(TAG, "Classic BT HID started — not discoverable (host already seen this boot)");
+            }
             page_bonded_hosts();
         } else {
             ESP_LOGE(TAG, "Classic BT HID start failed: %d", param->start.status);
@@ -286,6 +292,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "Classic BT host connected");
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
             s_bt_connected = true;
+            s_host_connected_this_boot = true;
         } else {
             ESP_LOGE(TAG, "Classic BT connect failed: %d", param->connect.status);
         }
@@ -293,7 +300,17 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDD_DISCONNECT_EVENT:
         ESP_LOGI(TAG, "Classic BT host disconnected");
         s_bt_connected = false;
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        if (!s_host_connected_this_boot) {
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        } else if (s_ble_connected) {
+            /* Host dropped while BLE is still up — reconnect to host */
+            ESP_LOGI(TAG, "Host dropped, BLE still up — paging cached host");
+            page_bonded_hosts();
+        } else {
+            /* BLE dropped first and triggered this disconnect — wait for BLE to
+             * reconnect; start_classic_bt_hid() will page the host then */
+            ESP_LOGI(TAG, "Host dropped due to BLE loss — will reconnect when BLE returns");
+        }
         break;
     case ESP_HIDD_STOP_EVENT:
         ESP_LOGI(TAG, "Classic BT HID stopped");
@@ -439,6 +456,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
 
             s_ble_connected = true;   /* set before clearing connecting — no race with scan_task */
             s_ble_connecting = false;
+            s_controller_connected_this_boot = true;
             start_classic_bt_hid(param->open.dev);
         } else {
             ESP_LOGE(TAG, "BLE HID open failed");
@@ -535,6 +553,11 @@ static void scan_task(void *pvParameters)
                 continue;
             }
             s_ble_connecting = false;
+            if (s_controller_connected_this_boot) {
+                ESP_LOGI(TAG, "Cached device unavailable — not scanning (controller already seen this boot)");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                continue;
+            }
             ESP_LOGI(TAG, "Cached device unavailable, scanning for new device");
         }
 

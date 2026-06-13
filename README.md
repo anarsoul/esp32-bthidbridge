@@ -96,12 +96,21 @@ Before flashing, put the ESP32 into boot mode: press and hold the **BOOT** butto
 
 After the first successful pairing, both connections are cached:
 
-- On boot the ESP32 attempts to reconnect to the cached BLE controller for up to 30 seconds before falling back to scanning for a new one.
+- On boot the ESP32 attempts to reconnect to the cached BLE controller for up to 30 seconds before falling back to scanning for a new one. Once a controller has connected during a boot session, the ESP32 will not scan for a different device — it retries the cached address only.
 - The Classic BT device name is restored from NVS immediately on boot, so the host can reconnect without waiting for the BLE side to come up first.
+- Once a Classic BT host has connected during a boot session, the ESP32 becomes non-discoverable and will only page the known host on subsequent disconnects — it will not accept connections from new hosts.
 
 ### Replacing the controller
 
-Put the new BLE controller into pairing mode while the ESP32 has no active BLE connection (previous controller is off or out of range). The ESP32 will discover and connect to the new device, then update the cached address and Classic BT name automatically.
+The old controller must be offline (powered off or out of range) before pairing a new one. Reset the ESP32 — on boot it will attempt the cached address for up to 30 seconds, fail, then scan for and connect to the new controller. The cached address and Classic BT name are updated automatically.
+
+### Pairing a new Classic BT host
+
+The ESP32 is discoverable only during a boot session in which no Classic BT host has yet connected. To pair a new host:
+
+1. Make the old host forget the bridge (remove it from its Bluetooth device list) **or** ensure it is unreachable.
+2. Reset the ESP32.
+3. On the new host, scan for Bluetooth devices and pair with the ESP32 as you would with any HID peripheral.
 
 ## Architecture
 
