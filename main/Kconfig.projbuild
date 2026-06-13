@@ -30,7 +30,7 @@ menu "BT HID Bridge Configuration"
 
     config BRIDGE_FORWARD_INTERVAL_MS
         int "Classic BT HID forward interval (ms)"
-        default 10
+        default 5
         range 5 100
         help
             Minimum interval between HID report forwards to the Classic BT host.
