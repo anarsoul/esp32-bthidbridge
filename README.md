@@ -13,7 +13,7 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 - Classic BT device name mirrors the BLE controller name (e.g. `StadiaMXPB-d2ea Classic`)
 - Name and BLE device address persist across reboots; updated automatically when a new controller is paired
 - Requests minimum BLE connection interval (7.5 ms) for lowest latency
-- HID reports forwarded via a dedicated task with configurable rate cap (default 20 ms / 50 Hz) to prevent BTA/L2CAP overflow on hosts that poll Classic BT infrequently
+- HID reports forwarded via a dedicated task with configurable rate cap (default 5 ms / 200 Hz) to prevent BTA/L2CAP overflow on hosts that poll Classic BT infrequently
 - Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
 - Supports any BLE HID device (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
