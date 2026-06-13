@@ -157,18 +157,6 @@ static esp_err_t nvs_load_ble_device(esp_bd_addr_t bda, esp_ble_addr_type_t *add
     return ret;
 }
 
-static int32_t read_axis(const uint8_t *data, uint16_t data_len, const axis_info_t *ax)
-{
-    uint32_t val = 0;
-    for (uint8_t b = 0; b < ax->bit_size; b++) {
-        uint16_t byte_idx = (ax->bit_offset + b) / 8;
-        uint8_t  bit_idx  = (ax->bit_offset + b) % 8;
-        if (byte_idx < data_len && ((data[byte_idx] >> bit_idx) & 1))
-            val |= (1u << b);
-    }
-    return (int32_t)val;
-}
-
 /* Walk the HID descriptor and record bit-positions for X/Y/Z/Rz axes. */
 static void find_axes_in_map(const uint8_t *map, size_t len)
 {
@@ -233,6 +221,18 @@ static void find_axes_in_map(const uint8_t *map, size_t len)
 }
 
 #if CONFIG_BRIDGE_LOG_AXES
+static int32_t read_axis(const uint8_t *data, uint16_t data_len, const axis_info_t *ax)
+{
+    uint32_t val = 0;
+    for (uint8_t b = 0; b < ax->bit_size; b++) {
+        uint16_t byte_idx = (ax->bit_offset + b) / 8;
+        uint8_t  bit_idx  = (ax->bit_offset + b) % 8;
+        if (byte_idx < data_len && ((data[byte_idx] >> bit_idx) & 1))
+            val |= (1u << b);
+    }
+    return (int32_t)val;
+}
+
 static void log_axes_if_changed(uint8_t report_id, const uint8_t *data, uint16_t len)
 {
     static uint8_t  s_prev[MAX_REPORT_LEN];
