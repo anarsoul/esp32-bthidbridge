@@ -31,6 +31,7 @@
 #include "esp_hid_gap.h"
 #include "esp_hidd_api.h"
 #include "esp_gap_bt_api.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "BT_HID_BRIDGE";
 
@@ -614,6 +615,27 @@ static void scan_task(void *pvParameters)
     }
 }
 
+#if CONFIG_BRIDGE_LED_ENABLE
+static void led_task(void *pvParameters)
+{
+    bool level = false;
+    while (1) {
+        if (s_ble_connected && s_bt_connected) {
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        } else if (s_ble_connected) {
+            level = !level;
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, level);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        } else {
+            level = !level;
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, level);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+}
+#endif
+
 void app_main(void)
 {
     esp_err_t ret;
@@ -667,6 +689,19 @@ void app_main(void)
     s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
     xTaskCreate(hid_forward_task, "hid_fwd", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
     xTaskCreate(scan_task, "scan", 6144, NULL, configMAX_PRIORITIES - 3, NULL);
+
+#if CONFIG_BRIDGE_LED_ENABLE
+    gpio_config_t led_cfg = {
+        .pin_bit_mask = 1ULL << CONFIG_BRIDGE_LED_GPIO,
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 0);
+    xTaskCreate(led_task, "led", 1024, NULL, configMAX_PRIORITIES - 4, NULL);
+#endif
 
     ESP_LOGI(TAG, "Bridge ready. Peer filter: \"%s\"",
              strlen(CONFIG_BRIDGE_PEER_DEVICE_NAME) > 0

@@ -17,6 +17,7 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 - Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
 - Supports any BLE HID device (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
+- Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller, slow blink = waiting for Classic BT host, steady = both connected and ready
 
 ## Requirements
 
@@ -52,6 +53,8 @@ Relevant options are under **BT HID Bridge Configuration**:
 | `BRIDGE_FORWARD_INTERVAL_MS` | `10` | Minimum interval between HID report forwards to the Classic BT host (ms). Reports arriving faster are coalesced; only the latest is sent. 10 ms = 100 Hz. |
 | `BRIDGE_AUTO_RECONNECT` | enabled | Automatically restart scanning and reconnect after the BLE controller disconnects. |
 | `BRIDGE_LOG_AXES` | disabled | Log analog axis values (LX/LY/RX/RY) on every changed report. Useful for debugging stuck controls. |
+| `BRIDGE_LED_ENABLE` | enabled | Enable the status LED. |
+| `BRIDGE_LED_GPIO` | `13` | GPIO pin for the status LED. Connect an LED with a series resistor between this pin and GND. |
 | `EXAMPLE_SSP_ENABLED` | enabled | Use Secure Simple Pairing for Classic BT. Disable to fall back to legacy PIN pairing. |
 
 ### Build
@@ -99,6 +102,18 @@ After the first successful pairing, both connections are cached:
 - On boot the ESP32 attempts to reconnect to the cached BLE controller for up to 30 seconds before falling back to scanning for a new one. Once a controller has connected during a boot session, the ESP32 will not scan for a different device — it retries the cached address only.
 - The Classic BT device name is restored from NVS immediately on boot, so the host can reconnect without waiting for the BLE side to come up first.
 - Once a Classic BT host has connected during a boot session, the ESP32 becomes non-discoverable and will only page the known host on subsequent disconnects — it will not accept connections from new hosts.
+
+### Status LED
+
+Connect an LED with a series resistor between GPIO13 and GND. The LED indicates the current connection state:
+
+| Pattern | Meaning |
+|---------|---------|
+| Fast blink (100 ms) | Waiting for BLE controller |
+| Slow blink (500 ms) | BLE controller connected, waiting for Classic BT host |
+| Steady on | Both connected — bridge is active |
+
+The GPIO pin and enable/disable can be changed via `BRIDGE_LED_GPIO` and `BRIDGE_LED_ENABLE` in `idf.py menuconfig`.
 
 ### Replacing the controller
 

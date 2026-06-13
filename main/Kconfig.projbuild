@@ -43,4 +43,21 @@ menu "BT HID Bridge Configuration"
         help
             Log LX/LY/RX/RY axis values whenever the HID report changes.
             Useful for debugging stuck controls; disable in production.
+
+    config BRIDGE_LED_ENABLE
+        bool "Enable status LED"
+        default y
+        help
+            Drive a GPIO pin as a status LED.
+            Fast blink: waiting for BLE controller.
+            Slow blink: BLE connected, waiting for Classic BT host.
+            Solid on: both BLE and Classic BT connected.
+
+    config BRIDGE_LED_GPIO
+        int "Status LED GPIO number"
+        depends on BRIDGE_LED_ENABLE
+        default 13
+        help
+            GPIO pin connected to the status LED.
+            GPIO2 is the built-in LED on ESP32 WROOM modules.
 endmenu
