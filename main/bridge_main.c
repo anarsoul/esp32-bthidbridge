@@ -79,6 +79,9 @@ typedef struct {
     uint16_t len;
     size_t   map_index;
     uint8_t  report_id;
+#if CONFIG_BRIDGE_LATENCY_MEASURE
+    uint64_t timestamp_us;
+#endif
 } hid_report_t;
 
 static QueueHandle_t s_report_queue = NULL;
@@ -488,6 +491,9 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         report.map_index = param->input.map_index;
         report.report_id = param->input.report_id;
         memcpy(report.data, param->input.data, len);
+#if CONFIG_BRIDGE_LATENCY_MEASURE
+        report.timestamp_us = esp_timer_get_time();
+#endif
         xQueueOverwrite(s_report_queue, &report);
         break;
     }
@@ -517,6 +523,32 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
 }
 
 
+#if CONFIG_BRIDGE_LATENCY_MEASURE
+#define LATENCY_LOG_WINDOW 100
+static void latency_record(uint32_t us)
+{
+    static uint32_t s_lat_min   = UINT32_MAX;
+    static uint32_t s_lat_max   = 0;
+    static uint64_t s_lat_sum   = 0;
+    static uint32_t s_lat_count = 0;
+
+    if (us < s_lat_min) s_lat_min = us;
+    if (us > s_lat_max) s_lat_max = us;
+    s_lat_sum += us;
+    s_lat_count++;
+
+    if (s_lat_count >= LATENCY_LOG_WINDOW) {
+        ESP_LOGI(TAG, "Fwd latency us/%u: min=%u max=%u avg=%u",
+                 LATENCY_LOG_WINDOW, s_lat_min, s_lat_max,
+                 (uint32_t)(s_lat_sum / s_lat_count));
+        s_lat_min   = UINT32_MAX;
+        s_lat_max   = 0;
+        s_lat_sum   = 0;
+        s_lat_count = 0;
+    }
+}
+#endif
+
 static void hid_forward_task(void *pvParameters)
 {
     hid_report_t report;
@@ -524,6 +556,9 @@ static void hid_forward_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(FORWARD_INTERVAL_MS));
         if (xQueueReceive(s_report_queue, &report, 0) != pdTRUE) continue;
         if (!s_bt_connected || !s_bt_hid_dev) continue;
+#if CONFIG_BRIDGE_LATENCY_MEASURE
+        latency_record((uint32_t)(esp_timer_get_time() - report.timestamp_us));
+#endif
         esp_err_t err = esp_hidd_dev_input_set(s_bt_hid_dev, report.map_index,
                                                report.report_id, report.data, report.len);
         if (err != ESP_OK) {

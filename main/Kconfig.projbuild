@@ -35,7 +35,7 @@ menu "BT HID Bridge Configuration"
         help
             Minimum interval between HID report forwards to the Classic BT host.
             Reports arriving faster than this are coalesced; only the latest is sent.
-            20ms = 50Hz, suitable for hosts that poll Classic BT at ~50Hz (e.g. Tesla).
+            10ms = 100Hz, suitable for hosts that poll Classic BT at ~100Hz (e.g. Tesla).
 
     config BRIDGE_LOG_AXES
         bool "Log analog axis values on change"
@@ -43,6 +43,14 @@ menu "BT HID Bridge Configuration"
         help
             Log LX/LY/RX/RY axis values whenever the HID report changes.
             Useful for debugging stuck controls; disable in production.
+
+    config BRIDGE_LATENCY_MEASURE
+        bool "Measure HID forwarding latency"
+        default n
+        help
+            Log internal latency between receiving a BLE HID report and
+            forwarding it to the Classic BT stack. Min/max/avg are reported
+            every 100 forwarded reports. Disable in production.
 
     config BRIDGE_LED_ENABLE
         bool "Enable status LED"
