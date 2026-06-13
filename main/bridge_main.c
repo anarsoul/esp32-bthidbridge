@@ -58,9 +58,15 @@ typedef struct {
     uint8_t  bit_size;
 } axis_info_t;
 
+typedef enum {
+    BT_STATE_IDLE,        /* not connected */
+    BT_STATE_CONNECTING,  /* ACL up or HID negotiation in flight */
+    BT_STATE_CONNECTED,   /* HID profile active */
+} bt_state_t;
+
 static esp_hidd_dev_t    *s_bt_hid_dev          = NULL;
 static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name, persists across reconnects */
-static volatile bool      s_bt_connected         = false;
+static volatile bt_state_t s_bt_state           = BT_STATE_IDLE;
 static volatile bool      s_ble_connected        = false;
 static volatile bool      s_ble_connecting       = false;
 static volatile bool      s_controller_connected_this_boot = false;
@@ -297,17 +303,22 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         if (param->connect.status == ESP_OK) {
             ESP_LOGI(TAG, "Classic BT host connected");
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-            s_bt_connected = true;
+            s_bt_state = BT_STATE_CONNECTED;
             s_host_connected_this_boot = true;
         } else {
             ESP_LOGE(TAG, "Classic BT connect failed: %d", param->connect.status);
+            s_bt_state = BT_STATE_IDLE;
         }
         break;
-    case ESP_HIDD_DISCONNECT_EVENT:
+    case ESP_HIDD_DISCONNECT_EVENT: {
+        bool was_connecting = (s_bt_state == BT_STATE_CONNECTING);
         ESP_LOGI(TAG, "Classic BT host disconnected");
-        s_bt_connected = false;
+        s_bt_state = BT_STATE_IDLE;
         if (!s_host_connected_this_boot) {
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        } else if (was_connecting) {
+            /* HID negotiation failed — bt_reconnect_task will retry */
+            ESP_LOGI(TAG, "HID negotiation failed — will retry");
         } else if (s_ble_connected) {
             /* Host dropped while BLE is still up — reconnect to host */
             ESP_LOGI(TAG, "Host dropped, BLE still up — paging cached host");
@@ -318,6 +329,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "Host dropped due to BLE loss — will reconnect when BLE returns");
         }
         break;
+    }
     case ESP_HIDD_STOP_EVENT:
         ESP_LOGI(TAG, "Classic BT HID stopped");
         break;
@@ -331,6 +343,7 @@ static void page_bonded_hosts(void)
     esp_bd_addr_t host_bda;
     if (nvs_load_bt_host(host_bda) == ESP_OK) {
         ESP_LOGI(TAG, "Paging last host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(host_bda));
+        s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(host_bda);
         return;
     }
@@ -344,6 +357,7 @@ static void page_bonded_hosts(void)
     }
     if (esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
         ESP_LOGI(TAG, "Paging first bonded host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bond_list[0]));
+        s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(bond_list[0]);
     }
     free(bond_list);
@@ -353,6 +367,7 @@ static void on_bt_acl_connect(const esp_bd_addr_t bda)
 {
     ESP_LOGI(TAG, "Classic BT ACL connected: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
     nvs_save_bt_host(bda);
+    s_bt_state = BT_STATE_CONNECTING;
 }
 
 static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
@@ -478,7 +493,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     }
 
     case ESP_HIDH_INPUT_EVENT: {
-        if (!s_bt_connected || !s_bt_hid_dev) {
+        if (s_bt_state != BT_STATE_CONNECTED || !s_bt_hid_dev) {
             break;
         }
         uint16_t len = param->input.length > MAX_REPORT_LEN
@@ -510,7 +525,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         esp_hidh_dev_free(param->close.dev);
         s_ble_connected  = false;
         s_ble_connecting = false;
-        if (s_bt_connected) {
+        if (s_bt_state == BT_STATE_CONNECTED) {
             ESP_LOGI(TAG, "BLE lost — disconnecting Classic BT host");
             esp_bt_hid_device_disconnect();
         }
@@ -555,7 +570,7 @@ static void hid_forward_task(void *pvParameters)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(FORWARD_INTERVAL_MS));
         if (xQueueReceive(s_report_queue, &report, 0) != pdTRUE) continue;
-        if (!s_bt_connected || !s_bt_hid_dev) continue;
+        if (s_bt_state != BT_STATE_CONNECTED || !s_bt_hid_dev) continue;
 #if CONFIG_BRIDGE_LATENCY_MEASURE
         latency_record((uint32_t)(esp_timer_get_time() - report.timestamp_us));
 #endif
@@ -662,7 +677,7 @@ static void bt_reconnect_task(void *pvParameters)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (s_bt_connected || !s_ble_connected) {
+        if (s_bt_state != BT_STATE_IDLE || !s_ble_connected) {
             continue;
         }
         if (s_host_connected_this_boot) {
@@ -685,7 +700,7 @@ static void led_task(void *pvParameters)
 {
     bool level = false;
     while (1) {
-        if (s_ble_connected && s_bt_connected) {
+        if (s_ble_connected && s_bt_state == BT_STATE_CONNECTED) {
             gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
             vTaskDelay(pdMS_TO_TICKS(100));
         } else if (s_ble_connected) {
