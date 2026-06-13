@@ -615,6 +615,17 @@ static void scan_task(void *pvParameters)
     }
 }
 
+static void bt_reconnect_task(void *pvParameters)
+{
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!s_bt_connected && s_host_connected_this_boot && s_ble_connected) {
+            ESP_LOGI(TAG, "Classic BT host not connected — retrying page");
+            page_bonded_hosts();
+        }
+    }
+}
+
 #if CONFIG_BRIDGE_LED_ENABLE
 static void led_task(void *pvParameters)
 {
@@ -689,6 +700,7 @@ void app_main(void)
     s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
     xTaskCreate(hid_forward_task, "hid_fwd", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
     xTaskCreate(scan_task, "scan", 6144, NULL, configMAX_PRIORITIES - 3, NULL);
+    xTaskCreate(bt_reconnect_task, "bt_recon", 2048, NULL, configMAX_PRIORITIES - 3, NULL);
 
 #if CONFIG_BRIDGE_LED_ENABLE
     gpio_config_t led_cfg = {
