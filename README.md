@@ -17,7 +17,7 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 - Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
 - Supports any BLE HID device (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
-- Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller, slow blink = waiting for Classic BT host, steady = both connected and ready
+- Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller, slow blink = waiting for Classic BT host, steady = both connected; when fully connected, blinks every 5 s to show controller battery level: 1 blink = 0–25%, 2 blinks = 26–50%, 3 blinks = 51–75%, steady = above 75%
 
 ## Requirements
 
@@ -112,7 +112,10 @@ Connect an LED with a series resistor between GPIO13 and GND. The LED indicates 
 |---------|---------|
 | Fast blink (100 ms) | Waiting for BLE controller |
 | Slow blink (500 ms) | BLE controller connected, waiting for Classic BT host |
-| Steady on | Both connected — bridge is active |
+| Steady on | Both connected, controller battery above 75% |
+| 3 blinks every 5 s | Both connected, controller battery 51–75% |
+| 2 blinks every 5 s | Both connected, controller battery 26–50% |
+| 1 blink every 5 s | Both connected, controller battery 0–25% |
 
 The GPIO pin and enable/disable can be changed via `BRIDGE_LED_GPIO` and `BRIDGE_LED_ENABLE` in `idf.py menuconfig`.
 

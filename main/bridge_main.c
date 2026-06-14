@@ -72,6 +72,7 @@ static volatile bool      s_ble_connecting       = false;
 static esp_gatt_if_t      s_gattc_if             = ESP_GATT_IF_NONE;
 static volatile uint16_t  s_ble_conn_id          = 0xFFFF;
 static volatile uint16_t  s_battery_char_handle  = 0;
+static volatile uint8_t   s_battery_level        = 0xFF; /* 0xFF = unknown */
 static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
@@ -519,6 +520,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
 
     case ESP_HIDH_BATTERY_EVENT:
         if (param->battery.status == ESP_OK) {
+            s_battery_level = param->battery.level;
             ESP_LOGI(TAG, "Battery: %u%%", param->battery.level);
         }
         break;
@@ -551,6 +553,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
             s_ble_connecting     = false;
             s_ble_conn_id        = 0xFFFF;
             s_battery_char_handle = 0;
+            s_battery_level      = 0xFF;
             break;
         }
         const uint8_t *bda = esp_hidh_dev_bda_get(param->close.dev);
@@ -559,6 +562,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         s_ble_connecting     = false;
         s_ble_conn_id        = 0xFFFF;
         s_battery_char_handle = 0;
+        s_battery_level      = 0xFF;
         if (s_bt_state == BT_STATE_CONNECTED) {
             ESP_LOGI(TAG, "BLE lost — disconnecting Classic BT host");
             esp_bt_hid_device_disconnect();
@@ -735,8 +739,29 @@ static void led_task(void *pvParameters)
     bool level = false;
     while (1) {
         if (s_ble_connected && s_bt_state == BT_STATE_CONNECTED) {
-            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
+            uint8_t batt = s_battery_level;
+            /* 0xFF = unknown; treat same as >75% until first read arrives */
+            int blinks = (batt <= 25) ? 1 : (batt <= 50) ? 2 : (batt <= 75) ? 3 : 0;
+            if (blinks == 0) {
+                gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
+                vTaskDelay(pdMS_TO_TICKS(100));
+            } else {
+                for (int i = 0; i < blinks; i++) {
+                    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 0);
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                }
+                /* Stay on for the rest of the 5s cycle, checking state every 100 ms */
+                int remaining_ms = 5000 - blinks * 400;
+                while (remaining_ms > 0
+                       && s_ble_connected
+                       && s_bt_state == BT_STATE_CONNECTED) {
+                    int chunk = remaining_ms < 100 ? remaining_ms : 100;
+                    vTaskDelay(pdMS_TO_TICKS(chunk));
+                    remaining_ms -= chunk;
+                }
+            }
         } else if (s_ble_connected) {
             level = !level;
             gpio_set_level(CONFIG_BRIDGE_LED_GPIO, level);
@@ -759,6 +784,7 @@ static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
             && s_battery_char_handle != 0
             && param->read.handle == s_battery_char_handle) {
         if (param->read.status == ESP_GATT_OK && param->read.value_len >= 1) {
+            s_battery_level = param->read.value[0];
             ESP_LOGI(TAG, "Battery: %u%%", param->read.value[0]);
         }
         s_battery_char_handle = 0;
