@@ -69,6 +69,9 @@ static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name,
 static volatile bt_state_t s_bt_state           = BT_STATE_IDLE;
 static volatile bool      s_ble_connected        = false;
 static volatile bool      s_ble_connecting       = false;
+static esp_gatt_if_t      s_gattc_if             = ESP_GATT_IF_NONE;
+static volatile uint16_t  s_ble_conn_id          = 0xFFFF;
+static volatile uint16_t  s_battery_char_handle  = 0;
 static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
@@ -484,6 +487,28 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
             s_ble_connected = true;   /* set before clearing connecting — no race with scan_task */
             s_ble_connecting = false;
             s_controller_connected_this_boot = true;
+
+            /* Read initial battery level from Battery Service (0x180F / 0x2A19) */
+            if (s_gattc_if != ESP_GATT_IF_NONE && s_ble_conn_id != 0xFFFF) {
+                esp_bt_uuid_t svc_uuid  = { .len = ESP_UUID_LEN_16, .uuid.uuid16 = 0x180F };
+                esp_bt_uuid_t char_uuid = { .len = ESP_UUID_LEN_16, .uuid.uuid16 = 0x2A19 };
+                esp_gattc_service_elem_t svc = {0};
+                esp_gattc_char_elem_t    chr = {0};
+                uint16_t count = 1;
+                if (esp_ble_gattc_get_service(s_gattc_if, s_ble_conn_id, &svc_uuid,
+                                              &svc, &count, 0) == ESP_GATT_OK && count > 0) {
+                    count = 1;
+                    if (esp_ble_gattc_get_char_by_uuid(s_gattc_if, s_ble_conn_id,
+                                                       svc.start_handle, svc.end_handle,
+                                                       char_uuid, &chr, &count) == ESP_GATT_OK
+                            && count > 0) {
+                        s_battery_char_handle = chr.char_handle;
+                        esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
+                                                chr.char_handle, ESP_GATT_AUTH_REQ_NONE);
+                    }
+                }
+            }
+
             start_classic_bt_hid(param->open.dev);
         } else {
             ESP_LOGE(TAG, "BLE HID open failed");
@@ -491,6 +516,12 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         }
         break;
     }
+
+    case ESP_HIDH_BATTERY_EVENT:
+        if (param->battery.status == ESP_OK) {
+            ESP_LOGI(TAG, "Battery: %u%%", param->battery.level);
+        }
+        break;
 
     case ESP_HIDH_INPUT_EVENT: {
         if (s_bt_state != BT_STATE_CONNECTED || !s_bt_hid_dev) {
@@ -516,15 +547,18 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDH_CLOSE_EVENT: {
         if (!param->close.dev) {
             ESP_LOGW(TAG, "BLE HID close with NULL dev");
-            s_ble_connected  = false;
-            s_ble_connecting = false;
+            s_ble_connected      = false;
+            s_ble_connecting     = false;
+            s_ble_conn_id        = 0xFFFF;
+            s_battery_char_handle = 0;
             break;
         }
         const uint8_t *bda = esp_hidh_dev_bda_get(param->close.dev);
         ESP_LOGI(TAG, "BLE HID closed: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
-        esp_hidh_dev_free(param->close.dev);
-        s_ble_connected  = false;
-        s_ble_connecting = false;
+        s_ble_connected      = false;
+        s_ble_connecting     = false;
+        s_ble_conn_id        = 0xFFFF;
+        s_battery_char_handle = 0;
         if (s_bt_state == BT_STATE_CONNECTED) {
             ESP_LOGI(TAG, "BLE lost — disconnecting Classic BT host");
             esp_bt_hid_device_disconnect();
@@ -716,6 +750,39 @@ static void led_task(void *pvParameters)
 }
 #endif
 
+static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
+                                        esp_gatt_if_t gattc_if,
+                                        esp_ble_gattc_cb_param_t *param)
+{
+    /* Log our own battery read response after HIDH has processed the event. */
+    if (event == ESP_GATTC_READ_CHAR_EVT
+            && s_battery_char_handle != 0
+            && param->read.handle == s_battery_char_handle) {
+        if (param->read.status == ESP_GATT_OK && param->read.value_len >= 1) {
+            ESP_LOGI(TAG, "Battery: %u%%", param->read.value[0]);
+        }
+        s_battery_char_handle = 0;
+        return;
+    }
+
+    esp_hidh_gattc_event_handler(event, gattc_if, param);
+
+    switch (event) {
+    case ESP_GATTC_REG_EVT:
+        if (param->reg.status == ESP_GATT_OK) {
+            s_gattc_if = gattc_if;
+        }
+        break;
+    case ESP_GATTC_OPEN_EVT:
+        if (param->open.status == ESP_GATT_OK) {
+            s_ble_conn_id = param->open.conn_id;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 void app_main(void)
 {
     esp_err_t ret;
@@ -757,7 +824,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, 1));
     ESP_ERROR_CHECK(esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, 1));
 
-    ESP_ERROR_CHECK(esp_ble_gattc_register_callback(esp_hidh_gattc_event_handler));
+    ESP_ERROR_CHECK(esp_ble_gattc_register_callback(bridge_gattc_event_handler));
 
     esp_hidh_config_t hidh_config = {
         .callback         = ble_hidh_callback,
