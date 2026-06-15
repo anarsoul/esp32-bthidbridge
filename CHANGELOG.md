@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-06-15
+
 ### Added
 
 - `BRIDGE_BLE_MAX_CONN_INTERVAL` Kconfig option: BLE connection max interval in
@@ -74,7 +76,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Default `BRIDGE_FORWARD_INTERVAL_MS` set to 10 ms (100 Hz).
 - CPU frequency set to 160 MHz.
 
-[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/anarsoul/esp32-bthidbridge/releases/tag/v0.0.1
