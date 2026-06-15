@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `BRIDGE_BLE_MAX_CONN_INTERVAL` Kconfig option: BLE connection max interval in
+  units of 1.25 ms (default 12 = 15 ms). Common values documented in help text.
+- Release workflow builds a second firmware variant with a 10 ms BLE interval
+  (`bthidbridge-10ms-ble.bin`) alongside the default build.
+- Web installer now offers a variant selector between the two builds and includes
+  project description, features, requirements, status LED reference, and
+  first-pairing instructions.
+
 ## [0.0.3] - 2026-06-13
 
 ### Added
