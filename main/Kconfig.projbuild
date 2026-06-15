@@ -1,5 +1,5 @@
 menu "BT HID Bridge Configuration"
-    config EXAMPLE_SSP_ENABLED
+    config BRIDGE_SSP_ENABLED
         bool "Secure Simple Pairing"
         depends on BT_CLASSIC_ENABLED
         default y

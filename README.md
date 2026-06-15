@@ -56,7 +56,7 @@ Relevant options are under **BT HID Bridge Configuration**:
 | `BRIDGE_LATENCY_MEASURE` | disabled | Log HID forwarding latency (min/max/avg over 100 reports) between BLE report receipt and Classic BT forwarding. |
 | `BRIDGE_LED_ENABLE` | enabled | Enable the status LED. |
 | `BRIDGE_LED_GPIO` | `13` | GPIO pin for the status LED. Connect an LED with a series resistor between this pin and GND. |
-| `EXAMPLE_SSP_ENABLED` | enabled | Use Secure Simple Pairing for Classic BT. Disable to fall back to legacy PIN pairing. |
+| `BRIDGE_SSP_ENABLED` | enabled | Use Secure Simple Pairing for Classic BT. Disable to fall back to legacy PIN pairing. |
 
 ### Build
 
