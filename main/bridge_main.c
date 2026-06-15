@@ -474,11 +474,10 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
                      esp_hidh_dev_name_get(param->open.dev));
             esp_hidh_dev_dump(param->open.dev, stdout);
 
-            /* Request minimum connection interval for lowest latency.
-             * Default Bluedroid GATTC interval can be 50-100ms; 7.5ms is the BLE minimum. */
+            /* Default Bluedroid GATTC interval can be 50-100ms; request a tighter range. */
             esp_ble_conn_update_params_t conn_params = {
                 .min_int = 6,   /* 7.5ms */
-                .max_int = 12,  /* 15ms  */
+                .max_int = CONFIG_BRIDGE_BLE_MAX_CONN_INTERVAL,
                 .latency = 0,
                 .timeout = 400, /* 4s supervision timeout */
             };

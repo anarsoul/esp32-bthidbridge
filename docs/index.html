@@ -8,27 +8,121 @@
   <style>
     body {
       font-family: sans-serif;
-      max-width: 600px;
+      max-width: 680px;
       margin: 3em auto;
       padding: 0 1.5em;
       color: #222;
+      line-height: 1.5;
     }
-    h1 { font-size: 1.6em; }
-    esp-web-install-button { display: block; margin: 2em 0; }
+    h1 { font-size: 1.6em; margin-bottom: 0.2em; }
+    h2 { font-size: 1.1em; margin-top: 2em; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+    .subtitle { color: #555; margin-top: 0; }
+    .gh-link { font-size: 0.9em; }
+    pre {
+      background: #f4f4f4;
+      padding: 0.7em 1em;
+      border-radius: 4px;
+      font-size: 0.9em;
+      overflow-x: auto;
+    }
+    ul { padding-left: 1.4em; }
+    li { margin: 0.3em 0; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+    th, td { text-align: left; padding: 0.4em 0.6em; border-bottom: 1px solid #eee; }
+    th { font-weight: 600; }
+    .variants { margin: 1em 0 0.5em; }
+    .variants label { display: block; margin: 0.6em 0; cursor: pointer; }
+    .variants .desc { font-size: 0.85em; color: #555; margin-left: 1.6em; }
+    esp-web-install-button { display: block; margin: 1.5em 0; }
     .note { font-size: 0.9em; color: #555; }
   </style>
 </head>
 <body>
   <h1>ESP32 BT HID Bridge</h1>
-  <p>
-    Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth host
-    such as a PC, gaming console, or car head unit.
+  <p class="subtitle">
+    Bridges a BLE HID gamepad to a Classic Bluetooth host such as a car head unit,
+    PC, or gaming console. &mdash;
+    <a class="gh-link" href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>
   </p>
-  <p>Connect your ESP32 via USB, then click <strong>Install</strong>.</p>
-  <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+
+  <pre>[ BLE HID gamepad ] &lt;--BLE--&gt; [ ESP32 ] &lt;--Classic BT--&gt; [ Host ]</pre>
+
+  <h2>Features</h2>
+  <ul>
+    <li>Automatic BLE discovery; reconnects to the cached controller on every subsequent boot</li>
+    <li>Classic BT device name mirrors the BLE controller name (e.g. <em>StadiaMXPB Classic</em>)</li>
+    <li>Low-latency HID forwarding — configurable rate cap (default 5 ms / 200 Hz)</li>
+    <li>Latest-report-wins queue — stale stick positions are never forwarded</li>
+    <li>Status LED with battery level indication</li>
+    <li>Works with any BLE HID device (gamepad, keyboard, mouse)</li>
+  </ul>
+
+  <h2>Requirements</h2>
+  <ul>
+    <li><strong>ESP32</strong> with dual-mode Bluetooth (WROOM-32, WROVER, or equivalent).
+        Classic Bluetooth is only present on the original ESP32 &mdash;
+        <strong>ESP32-S3, C3, C6, and H2 are not supported.</strong></li>
+    <li>Chrome or Edge browser for the web installer below.</li>
+  </ul>
+
+  <h2>Status LED</h2>
+  <p>Connect an LED with a series resistor between GPIO&nbsp;13 and GND.</p>
+  <table>
+    <tr><th>Pattern</th><th>Meaning</th></tr>
+    <tr><td>Fast blink (100 ms)</td><td>Waiting for BLE controller</td></tr>
+    <tr><td>Slow blink (500 ms)</td><td>BLE connected, waiting for Classic BT host</td></tr>
+    <tr><td>Steady on</td><td>Both connected, battery &gt; 75%</td></tr>
+    <tr><td>3 blinks every 5 s</td><td>Both connected, battery 51–75%</td></tr>
+    <tr><td>2 blinks every 5 s</td><td>Both connected, battery 26–50%</td></tr>
+    <tr><td>1 blink every 5 s</td><td>Both connected, battery 0–25%</td></tr>
+  </table>
+
+  <h2>First pairing</h2>
+  <ol>
+    <li>Flash the firmware using the installer below.</li>
+    <li>Put your BLE controller into pairing mode.</li>
+    <li>The ESP32 scans and connects automatically (status LED blinks fast while searching).</li>
+    <li>Once the BLE controller is connected, the ESP32 appears over Classic BT as
+        <em>&lt;controller name&gt; Classic</em>.</li>
+    <li>On your host, scan for Bluetooth devices and pair as you would with any HID peripheral.</li>
+  </ol>
+  <p>Both connections are cached in flash — on subsequent boots the ESP32 reconnects to
+     the known controller and host without re-pairing.</p>
+
+  <h2>Web Installer</h2>
+  <p>
+    Before flashing, put the ESP32 into boot mode: hold <strong>BOOT</strong>, press and
+    release <strong>RESET</strong>, then release <strong>BOOT</strong>.
+  </p>
+  <p>Select a firmware variant, then click <strong>Install</strong>:</p>
+
+  <div class="variants">
+    <label>
+      <input type="radio" name="variant" value="manifest.json" checked>
+      Default (15 ms BLE connection interval)
+      <div class="desc">Recommended. Standard latency, lower power draw on the controller.</div>
+    </label>
+    <label>
+      <input type="radio" name="variant" value="manifest-10ms-ble.json">
+      Low latency (10 ms BLE connection interval)
+      <div class="desc">Slightly reduced BLE latency at the cost of higher controller battery drain.</div>
+    </label>
+  </div>
+
+  <esp-web-install-button id="install-btn" manifest="manifest.json"></esp-web-install-button>
+
   <p class="note">
     Requires Chrome or Edge on desktop. Does not work on Firefox or mobile browsers.<br>
-    Source code and documentation on <a href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>.
+    Full documentation and source code on
+    <a href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>.
   </p>
+
+  <script>
+    document.querySelectorAll('input[name="variant"]').forEach(function(r) {
+      r.addEventListener('change', function() {
+        document.getElementById('install-btn').setAttribute('manifest', r.value);
+      });
+    });
+  </script>
 </body>
 </html>
