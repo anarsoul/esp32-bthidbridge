@@ -131,6 +131,48 @@ The ESP32 is discoverable only during a boot session in which no Classic BT host
 2. Reset the ESP32.
 3. On the new host, scan for Bluetooth devices and pair with the ESP32 as you would with any HID peripheral.
 
+## Latency
+
+The bridge adds latency at two points in the HID report path.
+
+### BLE connection interval
+
+The BLE radio can only receive a GATT notification at each connection event. A button press that occurs just after a connection event must wait up to one full interval before the report reaches the ESP32.
+
+| `BRIDGE_BLE_MAX_CONN_INTERVAL` | Interval | Worst case | Average |
+|-------------------------------|----------|-----------|---------|
+| 6 (minimum) | 7.5 ms | 7.5 ms | ~3.75 ms |
+| 8 | 10 ms | 10 ms | ~5 ms |
+| 12 (default) | 15 ms | 15 ms | ~7.5 ms |
+
+Note: the peripheral may negotiate a higher interval than requested if its firmware requires it.
+
+### Forward interval
+
+After a BLE report is received it is placed in a depth-1 queue. `hid_forward_task` wakes every `BRIDGE_FORWARD_INTERVAL_MS` (default 5 ms) and forwards the latest queued report to the Classic BT stack. A report received just after the task went back to sleep waits up to one full forward interval.
+
+### Combined worst-case latency
+
+| Source | Worst case | Average |
+|--------|-----------|---------|
+| BLE connection interval (default 15 ms) | 15 ms | ~7.5 ms |
+| Forward interval (default 5 ms) | 5 ms | ~2.5 ms |
+| **Bridge total** | **~20 ms** | **~10 ms** |
+
+The Classic BT host adds its own polling delay on top - this is outside the bridge's control and varies by host.
+
+### Measuring forwarding latency
+
+Enable `BRIDGE_LATENCY_MEASURE` in `idf.py menuconfig` to log the time between receiving a BLE report and the `esp_hidd_dev_input_set` call. This captures the forward interval delay; the BLE connection interval delay is not included as it occurs before the report arrives at the ESP32.
+
+Every 100 forwarded reports the serial monitor prints:
+
+```
+Fwd latency us/100: min=NNN max=NNN avg=NNN
+```
+
+This is useful to verify the forward task is waking on schedule and to detect Bluedroid BTC task stalls, which would show up as elevated `max` values.
+
 ## Architecture
 
 ```
