@@ -1,6 +1,8 @@
 # ESP32 BT HID Bridge
 
-Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth HID device. The ESP32 connects to the BLE controller as a GATT client and re-exposes it to a Classic BT host (PC, console, Android phone), transparently forwarding all HID reports.
+Bridges a BLE HID gamepad to a Classic Bluetooth HID host. The ESP32 connects to the BLE controller as a GATT client and re-exposes it to a Classic BT host (PC, console, car head unit), transparently forwarding HID reports.
+
+> **Note:** only gamepads have been tested. Keyboards and mice are unlikely to work correctly — the bridge uses a depth-1 latest-report-wins queue, which means reports can be overwritten before forwarding. This is fine for analog stick state but will silently drop key press/release events and mouse movement deltas.
 
 ```
 [ BLE HID controller ] <--BLE--> [ ESP32 ] <--Classic BT--> [ Host ]
@@ -15,7 +17,7 @@ Bridges a BLE HID controller (gamepad, keyboard, mouse) to a Classic Bluetooth H
 - Requests minimum BLE connection interval (7.5 ms) for lowest latency
 - HID reports forwarded via a dedicated task with configurable rate cap (default 5 ms / 200 Hz) to prevent BTA/L2CAP overflow on hosts that poll Classic BT infrequently
 - Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
-- Supports any BLE HID device (identified by HID service UUID or HID appearance value)
+- Supports any BLE HID gamepad (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
 - Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller, slow blink = waiting for Classic BT host, steady = both connected; when fully connected, blinks every 5 s to show controller battery level: 1 blink = 0–25%, 2 blinks = 26–50%, 3 blinks = 51–75%, steady = above 75%
 
