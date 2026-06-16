@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Battery level is now reported to the Classic BT host via a HID battery
+  feature report, with periodic polling of the BLE peripheral's Battery
+  Service.
+- Rumble/output reports from the Classic BT host are forwarded to the BLE
+  peripheral (Stadia controller and any BLE HID device with output reports).
+- DIP SDP record registered on the Classic BT side to expose the controller's
+  VID/PID to the host.
+- New LED blink pattern (short-long) while the bridge is discoverable and
+  waiting for a new Classic BT host to pair.
+
+### Changed
+
+- In pairing mode the bridge now pages the cached Classic BT host up to 3
+  times before falling back to discoverable mode. After exhausting attempts,
+  `esp_bt_hid_device_virtual_cable_unplug()` is called to clear Bluedroid's
+  internal `in_use` flag so a new host can pair successfully.
+- `EXAMPLE_SSP_ENABLED` Kconfig symbol renamed to `BRIDGE_SSP_ENABLED`.
+
+### Fixed
+
+- `page_bonded_hosts()` now returns a bool so callers can distinguish "a page
+  was initiated" from "no cached host found", preventing a race where the
+  bridge could go discoverable while an outgoing page was still in flight.
+
 ## [0.0.4] - 2026-06-15
 
 ### Added
