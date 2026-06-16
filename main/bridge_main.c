@@ -65,10 +65,11 @@ typedef enum {
     BT_STATE_CONNECTED,   /* HID profile active */
 } bt_state_t;
 
-static esp_hidd_dev_t    *s_bt_hid_dev          = NULL;
-static esp_hidh_dev_t    *s_ble_hidh_dev         = NULL;
+static esp_hidd_dev_t * volatile s_bt_hid_dev    = NULL;
+static esp_hidh_dev_t * volatile s_ble_hidh_dev  = NULL;
 static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name, persists across reconnects */
 static volatile bt_state_t s_bt_state           = BT_STATE_IDLE;
+static portMUX_TYPE       s_bt_state_mux        = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool      s_ble_connected        = false;
 static volatile bool      s_ble_connecting       = false;
 static esp_gatt_if_t      s_gattc_if             = ESP_GATT_IF_NONE;
@@ -79,7 +80,8 @@ static volatile bool      s_battery_read_pending  = false;
 static uint8_t            s_battery_report_id    = 0;    /* 0 = not assigned */
 static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
-static volatile int       s_page_attempt_count             = 0; /* pairing mode: outgoing page attempts made */
+static int                s_page_attempt_count             = 0; /* pairing mode: outgoing page attempts made */
+static portMUX_TYPE       s_page_count_mux                 = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool      s_bt_discoverable                = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
@@ -381,8 +383,10 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
                  * L2CAP connections from a different device while an outgoing
                  * connect is in flight.  Go discoverable only after all attempts
                  * are exhausted or if there is no cached host at all. */
-                s_page_attempt_count++;
-                ESP_LOGI(TAG, "Classic BT HID started — paging cached host (attempt %d/3)", s_page_attempt_count);
+                taskENTER_CRITICAL(&s_page_count_mux);
+                int attempt = ++s_page_attempt_count;
+                taskEXIT_CRITICAL(&s_page_count_mux);
+                ESP_LOGI(TAG, "Classic BT HID started — paging cached host (attempt %d/3)", attempt);
                 if (!page_bonded_hosts()) {
                     ESP_LOGI(TAG, "No cached host — making discoverable");
                     set_bt_discoverable(true);
@@ -399,11 +403,15 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         if (param->connect.status == ESP_OK) {
             ESP_LOGI(TAG, "Classic BT host connected");
             set_bt_discoverable(false);
+            taskENTER_CRITICAL(&s_bt_state_mux);
             s_bt_state = BT_STATE_CONNECTED;
+            taskEXIT_CRITICAL(&s_bt_state_mux);
             s_host_connected_this_boot = true;
         } else {
             ESP_LOGE(TAG, "Classic BT connect failed: %d", param->connect.status);
+            taskENTER_CRITICAL(&s_bt_state_mux);
             s_bt_state = BT_STATE_IDLE;
+            taskEXIT_CRITICAL(&s_bt_state_mux);
             if (!s_host_connected_this_boot) {
                 if (s_page_attempt_count >= 3) {
                     ESP_LOGI(TAG, "Cached host not responding after %d attempts — going discoverable",
@@ -421,9 +429,11 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         }
         break;
     case ESP_HIDD_DISCONNECT_EVENT: {
+        taskENTER_CRITICAL(&s_bt_state_mux);
         bool was_connecting = (s_bt_state == BT_STATE_CONNECTING);
-        ESP_LOGI(TAG, "Classic BT host disconnected");
         s_bt_state = BT_STATE_IDLE;
+        taskEXIT_CRITICAL(&s_bt_state_mux);
+        ESP_LOGI(TAG, "Classic BT host disconnected");
         if (!s_host_connected_this_boot) {
             if (was_connecting) {
                 /* Attempt count was incremented when paging was initiated;
@@ -497,27 +507,44 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
 
 static bool page_bonded_hosts(void)
 {
+    /* Atomically claim the CONNECTING slot; bail if not idle. */
+    taskENTER_CRITICAL(&s_bt_state_mux);
+    bool idle = (s_bt_state == BT_STATE_IDLE);
+    if (idle) s_bt_state = BT_STATE_CONNECTING;
+    taskEXIT_CRITICAL(&s_bt_state_mux);
+    if (!idle) return false;
+
     esp_bd_addr_t host_bda;
     if (nvs_load_bt_host(host_bda) == ESP_OK) {
         ESP_LOGI(TAG, "Paging last host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(host_bda));
-        s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(host_bda);
         return true;
     }
     /* No cached host yet — fall back to first bonded device */
     int bond_num = esp_bt_gap_get_bond_device_num();
-    if (bond_num <= 0) return false;
+    if (bond_num <= 0) {
+        taskENTER_CRITICAL(&s_bt_state_mux);
+        s_bt_state = BT_STATE_IDLE;
+        taskEXIT_CRITICAL(&s_bt_state_mux);
+        return false;
+    }
     esp_bd_addr_t *bond_list = calloc(bond_num, sizeof(esp_bd_addr_t));
     if (!bond_list) {
         ESP_LOGE(TAG, "OOM listing bonded devices");
+        taskENTER_CRITICAL(&s_bt_state_mux);
+        s_bt_state = BT_STATE_IDLE;
+        taskEXIT_CRITICAL(&s_bt_state_mux);
         return false;
     }
     bool paged = false;
     if (esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
         ESP_LOGI(TAG, "Paging first bonded host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bond_list[0]));
-        s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(bond_list[0]);
         paged = true;
+    } else {
+        taskENTER_CRITICAL(&s_bt_state_mux);
+        s_bt_state = BT_STATE_IDLE;
+        taskEXIT_CRITICAL(&s_bt_state_mux);
     }
     free(bond_list);
     return paged;
@@ -527,7 +554,9 @@ static void on_bt_acl_connect(const esp_bd_addr_t bda)
 {
     ESP_LOGI(TAG, "Classic BT ACL connected: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
     nvs_save_bt_host(bda);
+    taskENTER_CRITICAL(&s_bt_state_mux);
     s_bt_state = BT_STATE_CONNECTING;
+    taskEXIT_CRITICAL(&s_bt_state_mux);
 }
 
 static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
@@ -535,8 +564,16 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     if (s_bt_hid_dev != NULL) {
         /* Classic BT HID already running — page the host to reconnect */
         ESP_LOGI(TAG, "Classic BT HID already initialized, paging host");
-        if (s_host_connected_this_boot || s_page_attempt_count < 3) {
-            if (!s_host_connected_this_boot) s_page_attempt_count++;
+        bool should_page = s_host_connected_this_boot;
+        if (!should_page) {
+            taskENTER_CRITICAL(&s_page_count_mux);
+            if (s_page_attempt_count < 3) {
+                s_page_attempt_count++;
+                should_page = true;
+            }
+            taskEXIT_CRITICAL(&s_page_count_mux);
+        }
+        if (should_page) {
             page_bonded_hosts();
         }
         return;
@@ -632,11 +669,14 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     esp_bt_gap_set_cod(cod, ESP_BT_SET_COD_MAJOR_MINOR);
     vTaskDelay(pdMS_TO_TICKS(100));
 
+    esp_hidd_dev_t *hid_dev = NULL;
     esp_err_t ret = esp_hidd_dev_init(&bt_hid_config, ESP_HID_TRANSPORT_BT,
-                                       bt_hidd_callback, &s_bt_hid_dev);
+                                       bt_hidd_callback, &hid_dev);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_hidd_dev_init failed: %d", ret);
         free_report_maps();
+    } else {
+        s_bt_hid_dev = hid_dev;
     }
 }
 
@@ -686,8 +726,11 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
                             && count > 0) {
                         s_battery_char_handle = chr.char_handle;
                         s_battery_read_pending = true;
-                        esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
-                                                chr.char_handle, ESP_GATT_AUTH_REQ_NONE);
+                        if (esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
+                                                    chr.char_handle,
+                                                    ESP_GATT_AUTH_REQ_NONE) != ESP_GATT_OK) {
+                            s_battery_read_pending = false;
+                        }
                     }
                 }
             }
@@ -923,13 +966,16 @@ static void bt_reconnect_task(void *pvParameters)
             /* Reconnect mode: host was seen this boot, retry unconditionally */
             ESP_LOGI(TAG, "Classic BT host not connected — retrying page");
             page_bonded_hosts();
-        } else if (s_page_attempt_count < 3) {
-            s_page_attempt_count++;
-            ESP_LOGI(TAG, "Classic BT host not connected — paging cached host (attempt %d/3)",
-                     s_page_attempt_count);
-            if (!page_bonded_hosts()) {
-                ESP_LOGI(TAG, "No cached host — making discoverable");
-                set_bt_discoverable(true);
+        } else {
+            taskENTER_CRITICAL(&s_page_count_mux);
+            int attempt = s_page_attempt_count < 3 ? ++s_page_attempt_count : 0;
+            taskEXIT_CRITICAL(&s_page_count_mux);
+            if (attempt > 0) {
+                ESP_LOGI(TAG, "Classic BT host not connected — paging cached host (attempt %d/3)", attempt);
+                if (!page_bonded_hosts()) {
+                    ESP_LOGI(TAG, "No cached host — making discoverable");
+                    set_bt_discoverable(true);
+                }
             }
         }
         /* else: 3 attempts exhausted, already discoverable — nothing to do */
@@ -992,11 +1038,19 @@ static void battery_poll_task(void *pvParameters)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        if (!s_ble_connected || s_battery_char_handle == 0 || s_battery_read_pending) continue;
-        if (s_gattc_if == ESP_GATT_IF_NONE || s_ble_conn_id == 0xFFFF) continue;
+        /* Snapshot volatile GATT parameters before any guard checks so a
+         * concurrent CLOSE_EVENT cannot zero them between our checks and the
+         * actual call, which would leave s_battery_read_pending stuck true. */
+        esp_gatt_if_t gattc_if   = s_gattc_if;
+        uint16_t      conn_id    = s_ble_conn_id;
+        uint16_t      char_handle = s_battery_char_handle;
+        if (!s_ble_connected || char_handle == 0 || s_battery_read_pending) continue;
+        if (gattc_if == ESP_GATT_IF_NONE || conn_id == 0xFFFF) continue;
         s_battery_read_pending = true;
-        esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
-                                s_battery_char_handle, ESP_GATT_AUTH_REQ_NONE);
+        if (esp_ble_gattc_read_char(gattc_if, conn_id,
+                                    char_handle, ESP_GATT_AUTH_REQ_NONE) != ESP_GATT_OK) {
+            s_battery_read_pending = false;
+        }
     }
 }
 
@@ -1004,6 +1058,23 @@ static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
                                         esp_gatt_if_t gattc_if,
                                         esp_ble_gattc_cb_param_t *param)
 {
+    /* Update our state before delegating — esp_hidh_gattc_event_handler may
+     * post ESP_HIDH_OPEN_EVENT to the HIDH task queue synchronously, and the
+     * HIDH task can run before we return, so s_gattc_if / s_ble_conn_id must
+     * be current before the call. */
+    switch (event) {
+    case ESP_GATTC_REG_EVT:
+        if (param->reg.status == ESP_GATT_OK)
+            s_gattc_if = gattc_if;
+        break;
+    case ESP_GATTC_OPEN_EVT:
+        if (param->open.status == ESP_GATT_OK)
+            s_ble_conn_id = param->open.conn_id;
+        break;
+    default:
+        break;
+    }
+
     /* Intercept our own battery read response before HIDH sees it. */
     if (event == ESP_GATTC_READ_CHAR_EVT
             && s_battery_read_pending
@@ -1018,21 +1089,6 @@ static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
     }
 
     esp_hidh_gattc_event_handler(event, gattc_if, param);
-
-    switch (event) {
-    case ESP_GATTC_REG_EVT:
-        if (param->reg.status == ESP_GATT_OK) {
-            s_gattc_if = gattc_if;
-        }
-        break;
-    case ESP_GATTC_OPEN_EVT:
-        if (param->open.status == ESP_GATT_OK) {
-            s_ble_conn_id = param->open.conn_id;
-        }
-        break;
-    default:
-        break;
-    }
 }
 
 static void sdp_callback(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
