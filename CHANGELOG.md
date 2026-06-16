@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-06-15
+
 ### Added
 
 - Battery level is now reported to the Classic BT host via a HID battery
@@ -104,7 +106,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Default `BRIDGE_FORWARD_INTERVAL_MS` set to 10 ms (100 Hz).
 - CPU frequency set to 160 MHz.
 
-[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.1...v0.0.2
