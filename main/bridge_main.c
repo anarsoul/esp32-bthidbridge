@@ -31,6 +31,7 @@
 #include "esp_hid_gap.h"
 #include "esp_hidd_api.h"
 #include "esp_gap_bt_api.h"
+#include "esp_sdp_api.h"
 #include "driver/gpio.h"
 
 static const char *TAG = "BT_HID_BRIDGE";
@@ -424,6 +425,21 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     uint16_t ver = esp_hidh_dev_version_get(ble_dev);
     ESP_LOGI(TAG, "BLE device: VID=0x%04x PID=0x%04x VER=0x%04x", vid, pid, ver);
 
+    /* Register a DIP SDP record so Classic BT hosts can discover VID/PID.
+     * bt_hidd.c stores these values but never creates the required DIP record. */
+    if (vid != 0 || pid != 0) {
+        esp_bluetooth_sdp_record_t dip = {0};
+        dip.dip.hdr.type                  = ESP_SDP_TYPE_DIP_SERVER;
+        dip.dip.hdr.rfcomm_channel_number = -1;
+        dip.dip.hdr.l2cap_psm             = -1;
+        dip.dip.vendor                    = vid;
+        dip.dip.vendor_id_source          = ESP_SDP_VENDOR_ID_SRC_USB;
+        dip.dip.product                   = pid;
+        dip.dip.version                   = ver;
+        dip.dip.primary_record            = true;
+        esp_sdp_create_record(&dip);
+    }
+
     const char *ble_name = esp_hidh_dev_name_get(ble_dev);
     if (ble_name && ble_name[0] != '\0') {
         snprintf(s_bt_name, sizeof(s_bt_name), "%s Classic", ble_name);
@@ -808,6 +824,13 @@ static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
     }
 }
 
+static void sdp_callback(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param)
+{
+    if (event == ESP_SDP_CREATE_RECORD_COMP_EVT) {
+        ESP_LOGI(TAG, "DIP SDP record created (status=%d)", param->create_record.status);
+    }
+}
+
 void app_main(void)
 {
     esp_err_t ret;
@@ -857,6 +880,9 @@ void app_main(void)
         .callback_arg     = NULL,
     };
     ESP_ERROR_CHECK(esp_hidh_init(&hidh_config));
+
+    esp_sdp_register_callback(sdp_callback);
+    ESP_ERROR_CHECK(esp_sdp_init());
 
     s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
     xTaskCreate(hid_forward_task, "hid_fwd", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
