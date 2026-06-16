@@ -66,6 +66,7 @@ typedef enum {
 } bt_state_t;
 
 static esp_hidd_dev_t    *s_bt_hid_dev          = NULL;
+static esp_hidh_dev_t    *s_ble_hidh_dev         = NULL;
 static char               s_bt_name[BT_NAME_MAX_LEN]; /* Classic BT device name, persists across reconnects */
 static volatile bt_state_t s_bt_state           = BT_STATE_IDLE;
 static volatile bool      s_ble_connected        = false;
@@ -96,6 +97,7 @@ typedef struct {
 } hid_report_t;
 
 static QueueHandle_t s_report_queue = NULL;
+static QueueHandle_t s_rumble_queue = NULL;
 
 static esp_err_t nvs_save_ble_device(const esp_bd_addr_t bda, esp_ble_addr_type_t addr_type)
 {
@@ -335,6 +337,34 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         }
         break;
     }
+    case ESP_HIDD_OUTPUT_EVENT: {
+        esp_hidh_dev_t *ble_dev = s_ble_hidh_dev;
+        if (ble_dev && esp_hidh_dev_exists(ble_dev)) {
+            esp_hidh_dev_output_set(ble_dev,
+                                    param->output.map_index,
+                                    param->output.report_id,
+                                    param->output.data,
+                                    param->output.length);
+        }
+        break;
+    }
+    case ESP_HIDD_FEATURE_EVENT:
+        /* bt_hidd.c never acknowledges SET_REPORT on the success path, so the host
+         * waits 3-4 s for a handshake timeout before retrying. Send it here. */
+        if (param->feature.trans_type == ESP_HID_TRANS_SET_REPORT) {
+            esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_SUCCESS);
+        }
+        if (param->feature.report_type == ESP_HID_REPORT_TYPE_OUTPUT) {
+            uint16_t len = param->feature.length < MAX_REPORT_LEN
+                           ? param->feature.length : MAX_REPORT_LEN;
+            hid_report_t rumble;
+            rumble.report_id = param->feature.report_id;
+            rumble.map_index = param->feature.map_index;
+            rumble.len       = len;
+            memcpy(rumble.data, param->feature.data, len);
+            xQueueOverwrite(s_rumble_queue, &rumble);
+        }
+        break;
     case ESP_HIDD_STOP_EVENT:
         ESP_LOGI(TAG, "Classic BT HID stopped");
         break;
@@ -500,6 +530,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
             memcpy(conn_params.bda, bda, sizeof(esp_bd_addr_t));
             esp_ble_gap_update_conn_params(&conn_params);
 
+            s_ble_hidh_dev = param->open.dev;
             s_ble_connected = true;   /* set before clearing connecting — no race with scan_task */
             s_ble_connecting = false;
             s_controller_connected_this_boot = true;
@@ -564,6 +595,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDH_CLOSE_EVENT: {
         if (!param->close.dev) {
             ESP_LOGW(TAG, "BLE HID close with NULL dev");
+            s_ble_hidh_dev       = NULL;
             s_ble_connected      = false;
             s_ble_connecting     = false;
             s_ble_conn_id        = 0xFFFF;
@@ -573,6 +605,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
         }
         const uint8_t *bda = esp_hidh_dev_bda_get(param->close.dev);
         ESP_LOGI(TAG, "BLE HID closed: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
+        s_ble_hidh_dev       = NULL;
         s_ble_connected      = false;
         s_ble_connecting     = false;
         s_ble_conn_id        = 0xFFFF;
@@ -631,6 +664,21 @@ static void hid_forward_task(void *pvParameters)
                                                report.report_id, report.data, report.len);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "input_set failed: id=%u err=0x%x", report.report_id, err);
+        }
+    }
+}
+
+static void rumble_forward_task(void *pvParameters)
+{
+    hid_report_t rumble;
+    while (1) {
+        if (xQueueReceive(s_rumble_queue, &rumble, portMAX_DELAY) != pdTRUE) continue;
+        esp_hidh_dev_t *ble_dev = s_ble_hidh_dev;
+        if (!ble_dev || !esp_hidh_dev_exists(ble_dev)) continue;
+        esp_err_t err = esp_hidh_dev_output_set(ble_dev, rumble.map_index,
+                                                 rumble.report_id, rumble.data, rumble.len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "rumble forward failed: id=%u err=0x%x", rumble.report_id, err);
         }
     }
 }
@@ -885,9 +933,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_sdp_init());
 
     s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
-    xTaskCreate(hid_forward_task, "hid_fwd", 4096, NULL, configMAX_PRIORITIES - 2, NULL);
-    xTaskCreate(scan_task, "scan", 6144, NULL, configMAX_PRIORITIES - 3, NULL);
-    xTaskCreate(bt_reconnect_task, "bt_recon", 2048, NULL, configMAX_PRIORITIES - 3, NULL);
+    s_rumble_queue = xQueueCreate(1, sizeof(hid_report_t));
+    xTaskCreate(hid_forward_task,    "hid_fwd",   4096, NULL, configMAX_PRIORITIES - 2, NULL);
+    xTaskCreate(rumble_forward_task, "rumble_fwd", 2048, NULL, configMAX_PRIORITIES - 2, NULL);
+    xTaskCreate(scan_task,           "scan",       6144, NULL, configMAX_PRIORITIES - 3, NULL);
+    xTaskCreate(bt_reconnect_task,   "bt_recon",   2048, NULL, configMAX_PRIORITIES - 3, NULL);
 
 #if CONFIG_BRIDGE_LED_ENABLE
     gpio_config_t led_cfg = {
