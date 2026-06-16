@@ -745,8 +745,9 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
 
     case ESP_HIDH_BATTERY_EVENT:
         if (param->battery.status == ESP_OK) {
+            if (param->battery.level != s_battery_level)
+                ESP_LOGI(TAG, "Battery: %u%%", param->battery.level);
             s_battery_level = param->battery.level;
-            ESP_LOGI(TAG, "Battery: %u%%", param->battery.level);
         }
         break;
 
@@ -1081,8 +1082,9 @@ static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
             && s_battery_char_handle != 0
             && param->read.handle == s_battery_char_handle) {
         if (param->read.status == ESP_GATT_OK && param->read.value_len >= 1) {
+            if (param->read.value[0] != s_battery_level)
+                ESP_LOGI(TAG, "Battery: %u%%", param->read.value[0]);
             s_battery_level = param->read.value[0];
-            ESP_LOGI(TAG, "Battery: %u%%", param->read.value[0]);
         }
         s_battery_read_pending = false;
         return;
