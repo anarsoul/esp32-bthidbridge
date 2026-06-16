@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Battery level is now logged only when it changes, reducing log noise during
+  periodic BLE polling.
 - In pairing mode the bridge now pages the cached Classic BT host up to 3
   times before falling back to discoverable mode. After exhausting attempts,
   `esp_bt_hid_device_virtual_cable_unplug()` is called to clear Bluedroid's
