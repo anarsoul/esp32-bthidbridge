@@ -75,6 +75,8 @@ static esp_gatt_if_t      s_gattc_if             = ESP_GATT_IF_NONE;
 static volatile uint16_t  s_ble_conn_id          = 0xFFFF;
 static volatile uint16_t  s_battery_char_handle  = 0;
 static volatile uint8_t   s_battery_level        = 0xFF; /* 0xFF = unknown */
+static volatile bool      s_battery_read_pending  = false;
+static uint8_t            s_battery_report_id    = 0;    /* 0 = not assigned */
 static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
@@ -286,6 +288,74 @@ static void free_report_maps(void)
     s_report_maps_len = 0;
 }
 
+/* Walk all report maps with proper short-item parsing, return first unused report ID. */
+static uint8_t pick_battery_report_id(void)
+{
+    bool used[256] = {false};
+    used[0] = true; /* 0 = reserved (no report ID) */
+
+    for (size_t m = 0; m < s_report_maps_len; m++) {
+        const uint8_t *d = s_report_maps[m].data;
+        size_t len = s_report_maps[m].len;
+        size_t i = 0;
+        while (i < len) {
+            uint8_t b = d[i];
+            if (b == 0xFE) { /* long item */
+                if (i + 1 >= len) break;
+                i += 3 + d[i + 1];
+                continue;
+            }
+            uint32_t dlen = (uint32_t)(b & 0x03);
+            if (dlen == 3) dlen = 4;
+            uint8_t btype = (b >> 2) & 0x03;
+            uint8_t btag  = (b >> 4) & 0x0F;
+            if (btype == 1 && btag == 8 && dlen >= 1 && i + 1 < len) {
+                /* Global item: Report ID */
+                used[d[i + 1]] = true;
+            }
+            i += 1 + dlen;
+        }
+    }
+
+    for (int id = 1; id <= 255; id++) {
+        if (!used[id]) return (uint8_t)id;
+    }
+    return 0;
+}
+
+/* Append a Battery Strength Feature Report descriptor fragment to the last report map. */
+static void append_battery_feature_report(uint8_t report_id)
+{
+    if (s_report_maps_len == 0) return;
+
+    uint8_t desc[] = {
+        0x05, 0x06,              /* Usage Page (Generic Device Controls) */
+        0x09, 0x20,              /* Usage (Battery Strength)             */
+        0xa1, 0x01,              /* Collection (Application)             */
+        0x85, report_id,         /*   Report ID                          */
+        0x09, 0x20,              /*   Usage (Battery Strength)           */
+        0x15, 0x00,              /*   Logical Minimum (0)                */
+        0x26, 0x64, 0x00,        /*   Logical Maximum (100)              */
+        0x75, 0x08,              /*   Report Size (8)                    */
+        0x95, 0x01,              /*   Report Count (1)                   */
+        0xb1, 0x02,              /*   Feature (Data,Var,Abs)             */
+        0xc0,                    /* End Collection                       */
+    };
+
+    size_t idx = s_report_maps_len - 1;
+    size_t old_len = s_report_maps[idx].len;
+    size_t new_len = old_len + sizeof(desc);
+    uint8_t *buf = realloc((void *)s_report_maps[idx].data, new_len);
+    if (!buf) {
+        ESP_LOGE(TAG, "OOM appending battery descriptor");
+        return;
+    }
+    memcpy(buf + old_len, desc, sizeof(desc));
+    s_report_maps[idx].data = buf;
+    s_report_maps[idx].len  = (uint16_t)new_len;
+    ESP_LOGI(TAG, "Battery feature report appended (id=0x%02x) to map[%u]", report_id, idx);
+}
+
 static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
                               int32_t id, void *event_data)
 {
@@ -353,6 +423,15 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
          * waits 3-4 s for a handshake timeout before retrying. Send it here. */
         if (param->feature.trans_type == ESP_HID_TRANS_SET_REPORT) {
             esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_SUCCESS);
+        }
+        if (param->feature.trans_type == ESP_HID_TRANS_GET_REPORT
+                && s_battery_report_id != 0
+                && param->feature.report_id == s_battery_report_id) {
+            uint8_t level = (s_battery_level == 0xFF) ? 100 : s_battery_level;
+            esp_hidd_dev_feature_set(s_bt_hid_dev,
+                                     param->feature.map_index,
+                                     s_battery_report_id,
+                                     &level, 1);
         }
         if (param->feature.report_type == ESP_HID_REPORT_TYPE_OUTPUT) {
             uint16_t len = param->feature.length < MAX_REPORT_LEN
@@ -449,6 +528,13 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     for (size_t i = 0; i < s_report_maps_len; i++)
         find_axes_in_map(s_report_maps[i].data, s_report_maps[i].len);
 #endif
+
+    s_battery_report_id = pick_battery_report_id();
+    if (s_battery_report_id != 0) {
+        append_battery_feature_report(s_battery_report_id);
+    } else {
+        ESP_LOGW(TAG, "No free report ID for battery feature report");
+    }
 
     uint16_t vid = esp_hidh_dev_vendor_id_get(ble_dev);
     uint16_t pid = esp_hidh_dev_product_id_get(ble_dev);
@@ -550,6 +636,7 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
                                                        char_uuid, &chr, &count) == ESP_GATT_OK
                             && count > 0) {
                         s_battery_char_handle = chr.char_handle;
+                        s_battery_read_pending = true;
                         esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
                                                 chr.char_handle, ESP_GATT_AUTH_REQ_NONE);
                     }
@@ -595,22 +682,24 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDH_CLOSE_EVENT: {
         if (!param->close.dev) {
             ESP_LOGW(TAG, "BLE HID close with NULL dev");
-            s_ble_hidh_dev       = NULL;
-            s_ble_connected      = false;
-            s_ble_connecting     = false;
-            s_ble_conn_id        = 0xFFFF;
+            s_ble_hidh_dev        = NULL;
+            s_ble_connected       = false;
+            s_ble_connecting      = false;
+            s_ble_conn_id         = 0xFFFF;
             s_battery_char_handle = 0;
-            s_battery_level      = 0xFF;
+            s_battery_read_pending = false;
+            s_battery_level       = 0xFF;
             break;
         }
         const uint8_t *bda = esp_hidh_dev_bda_get(param->close.dev);
         ESP_LOGI(TAG, "BLE HID closed: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
-        s_ble_hidh_dev       = NULL;
-        s_ble_connected      = false;
-        s_ble_connecting     = false;
-        s_ble_conn_id        = 0xFFFF;
+        s_ble_hidh_dev        = NULL;
+        s_ble_connected       = false;
+        s_ble_connecting      = false;
+        s_ble_conn_id         = 0xFFFF;
         s_battery_char_handle = 0;
-        s_battery_level      = 0xFF;
+        s_battery_read_pending = false;
+        s_battery_level       = 0xFF;
         if (s_bt_state == BT_STATE_CONNECTED) {
             ESP_LOGI(TAG, "BLE lost — disconnecting Classic BT host");
             esp_bt_hid_device_disconnect();
@@ -838,19 +927,32 @@ static void led_task(void *pvParameters)
 }
 #endif
 
+static void battery_poll_task(void *pvParameters)
+{
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        if (!s_ble_connected || s_battery_char_handle == 0 || s_battery_read_pending) continue;
+        if (s_gattc_if == ESP_GATT_IF_NONE || s_ble_conn_id == 0xFFFF) continue;
+        s_battery_read_pending = true;
+        esp_ble_gattc_read_char(s_gattc_if, s_ble_conn_id,
+                                s_battery_char_handle, ESP_GATT_AUTH_REQ_NONE);
+    }
+}
+
 static void bridge_gattc_event_handler(esp_gattc_cb_event_t event,
                                         esp_gatt_if_t gattc_if,
                                         esp_ble_gattc_cb_param_t *param)
 {
-    /* Log our own battery read response after HIDH has processed the event. */
+    /* Intercept our own battery read response before HIDH sees it. */
     if (event == ESP_GATTC_READ_CHAR_EVT
+            && s_battery_read_pending
             && s_battery_char_handle != 0
             && param->read.handle == s_battery_char_handle) {
         if (param->read.status == ESP_GATT_OK && param->read.value_len >= 1) {
             s_battery_level = param->read.value[0];
             ESP_LOGI(TAG, "Battery: %u%%", param->read.value[0]);
         }
-        s_battery_char_handle = 0;
+        s_battery_read_pending = false;
         return;
     }
 
@@ -938,6 +1040,7 @@ void app_main(void)
     xTaskCreate(rumble_forward_task, "rumble_fwd", 2048, NULL, configMAX_PRIORITIES - 2, NULL);
     xTaskCreate(scan_task,           "scan",       6144, NULL, configMAX_PRIORITIES - 3, NULL);
     xTaskCreate(bt_reconnect_task,   "bt_recon",   2048, NULL, configMAX_PRIORITIES - 3, NULL);
+    xTaskCreate(battery_poll_task,   "batt_poll",  2048, NULL, configMAX_PRIORITIES - 3, NULL);
 
 #if CONFIG_BRIDGE_LED_ENABLE
     gpio_config_t led_cfg = {
