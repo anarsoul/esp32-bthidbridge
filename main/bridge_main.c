@@ -51,7 +51,7 @@ typedef struct {
     uint8_t addr_type;
 } __attribute__((packed)) nvs_ble_dev_t;
 
-static void page_bonded_hosts(void); /* forward declaration */
+static bool page_bonded_hosts(void); /* forward declaration */
 
 typedef struct {
     int16_t  report_id;  /* -1 = not found */
@@ -79,6 +79,8 @@ static volatile bool      s_battery_read_pending  = false;
 static uint8_t            s_battery_report_id    = 0;    /* 0 = not assigned */
 static volatile bool      s_controller_connected_this_boot = false;
 static volatile bool      s_host_connected_this_boot       = false;
+static volatile int       s_page_attempt_count             = 0; /* pairing mode: outgoing page attempts made */
+static volatile bool      s_bt_discoverable                = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
 #if CONFIG_BRIDGE_LOG_AXES
@@ -356,6 +358,14 @@ static void append_battery_feature_report(uint8_t report_id)
     ESP_LOGI(TAG, "Battery feature report appended (id=0x%02x) to map[%u]", report_id, idx);
 }
 
+static void set_bt_discoverable(bool discoverable)
+{
+    s_bt_discoverable = discoverable;
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE,
+                             discoverable ? ESP_BT_GENERAL_DISCOVERABLE
+                                          : ESP_BT_NON_DISCOVERABLE);
+}
+
 static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
                               int32_t id, void *event_data)
 {
@@ -366,12 +376,21 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDD_START_EVENT:
         if (param->start.status == ESP_OK) {
             if (!s_host_connected_this_boot) {
-                ESP_LOGI(TAG, "Classic BT HID started — making discoverable");
-                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+                /* Pairing mode: page the cached host.
+                 * Do NOT go discoverable yet — Bluedroid HIDD rejects incoming
+                 * L2CAP connections from a different device while an outgoing
+                 * connect is in flight.  Go discoverable only after all attempts
+                 * are exhausted or if there is no cached host at all. */
+                s_page_attempt_count++;
+                ESP_LOGI(TAG, "Classic BT HID started — paging cached host (attempt %d/3)", s_page_attempt_count);
+                if (!page_bonded_hosts()) {
+                    ESP_LOGI(TAG, "No cached host — making discoverable");
+                    set_bt_discoverable(true);
+                }
             } else {
                 ESP_LOGI(TAG, "Classic BT HID started — not discoverable (host already seen this boot)");
+                page_bonded_hosts();
             }
-            page_bonded_hosts();
         } else {
             ESP_LOGE(TAG, "Classic BT HID start failed: %d", param->start.status);
         }
@@ -379,12 +398,26 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDD_CONNECT_EVENT:
         if (param->connect.status == ESP_OK) {
             ESP_LOGI(TAG, "Classic BT host connected");
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+            set_bt_discoverable(false);
             s_bt_state = BT_STATE_CONNECTED;
             s_host_connected_this_boot = true;
         } else {
             ESP_LOGE(TAG, "Classic BT connect failed: %d", param->connect.status);
             s_bt_state = BT_STATE_IDLE;
+            if (!s_host_connected_this_boot) {
+                if (s_page_attempt_count >= 3) {
+                    ESP_LOGI(TAG, "Cached host not responding after %d attempts — going discoverable",
+                             s_page_attempt_count);
+                    /* Each page attempt calls HID_DevPlugDevice() internally, setting
+                     * hd_cb.device.in_use=TRUE and device.addr=old_host.  While in_use
+                     * is set, hidd_l2cif_connect_ind rejects incoming L2CAP connections
+                     * from any different BDA ("incoming connections from different device").
+                     * esp_bt_hid_device_virtual_cable_unplug() when not connected calls
+                     * HID_DevUnplugDevice(), clearing in_use so new hosts can pair. */
+                    esp_bt_hid_device_virtual_cable_unplug();
+                    set_bt_discoverable(true);
+                }
+            }
         }
         break;
     case ESP_HIDD_DISCONNECT_EVENT: {
@@ -392,7 +425,17 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         ESP_LOGI(TAG, "Classic BT host disconnected");
         s_bt_state = BT_STATE_IDLE;
         if (!s_host_connected_this_boot) {
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+            if (was_connecting) {
+                /* Attempt count was incremented when paging was initiated;
+                 * if attempts are exhausted ensure discoverable and in_use is cleared (idempotent). */
+                if (s_page_attempt_count >= 3) {
+                    esp_bt_hid_device_virtual_cable_unplug();
+                    set_bt_discoverable(true);
+                }
+            } else {
+                /* Unexpected disconnect in pairing mode — go discoverable */
+                set_bt_discoverable(true);
+            }
         } else if (was_connecting) {
             /* HID negotiation failed — bt_reconnect_task will retry */
             ESP_LOGI(TAG, "HID negotiation failed — will retry");
@@ -452,29 +495,32 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     }
 }
 
-static void page_bonded_hosts(void)
+static bool page_bonded_hosts(void)
 {
     esp_bd_addr_t host_bda;
     if (nvs_load_bt_host(host_bda) == ESP_OK) {
         ESP_LOGI(TAG, "Paging last host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(host_bda));
         s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(host_bda);
-        return;
+        return true;
     }
     /* No cached host yet — fall back to first bonded device */
     int bond_num = esp_bt_gap_get_bond_device_num();
-    if (bond_num <= 0) return;
+    if (bond_num <= 0) return false;
     esp_bd_addr_t *bond_list = calloc(bond_num, sizeof(esp_bd_addr_t));
     if (!bond_list) {
         ESP_LOGE(TAG, "OOM listing bonded devices");
-        return;
+        return false;
     }
+    bool paged = false;
     if (esp_bt_gap_get_bond_device_list(&bond_num, bond_list) == ESP_OK) {
         ESP_LOGI(TAG, "Paging first bonded host " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bond_list[0]));
         s_bt_state = BT_STATE_CONNECTING;
         esp_bt_hid_device_connect(bond_list[0]);
+        paged = true;
     }
     free(bond_list);
+    return paged;
 }
 
 static void on_bt_acl_connect(const esp_bd_addr_t bda)
@@ -489,7 +535,10 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     if (s_bt_hid_dev != NULL) {
         /* Classic BT HID already running — page the host to reconnect */
         ESP_LOGI(TAG, "Classic BT HID already initialized, paging host");
-        page_bonded_hosts();
+        if (s_host_connected_this_boot || s_page_attempt_count < 3) {
+            if (!s_host_connected_this_boot) s_page_attempt_count++;
+            page_bonded_hosts();
+        }
         return;
     }
 
@@ -874,14 +923,16 @@ static void bt_reconnect_task(void *pvParameters)
             /* Reconnect mode: host was seen this boot, retry unconditionally */
             ESP_LOGI(TAG, "Classic BT host not connected — retrying page");
             page_bonded_hosts();
-        } else {
-            /* Pairing mode: only retry if there is a cached host to try */
-            esp_bd_addr_t host_bda;
-            if (nvs_load_bt_host(host_bda) == ESP_OK) {
-                ESP_LOGI(TAG, "Classic BT host not connected — retrying cached host");
-                page_bonded_hosts();
+        } else if (s_page_attempt_count < 3) {
+            s_page_attempt_count++;
+            ESP_LOGI(TAG, "Classic BT host not connected — paging cached host (attempt %d/3)",
+                     s_page_attempt_count);
+            if (!page_bonded_hosts()) {
+                ESP_LOGI(TAG, "No cached host — making discoverable");
+                set_bt_discoverable(true);
             }
         }
+        /* else: 3 attempts exhausted, already discoverable — nothing to do */
     }
 }
 
@@ -914,6 +965,16 @@ static void led_task(void *pvParameters)
                     remaining_ms -= chunk;
                 }
             }
+        } else if (s_ble_connected && s_bt_discoverable) {
+            /* Short-long blink: discoverable, waiting for a new BT host to pair */
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 0);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 1);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 0);
+            vTaskDelay(pdMS_TO_TICKS(300));
         } else if (s_ble_connected) {
             level = !level;
             gpio_set_level(CONFIG_BRIDGE_LED_GPIO, level);

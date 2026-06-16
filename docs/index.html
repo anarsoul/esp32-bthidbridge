@@ -88,6 +88,10 @@
   </ol>
   <p>Both connections are cached in flash — on subsequent boots the ESP32 reconnects to
      the known controller and host without re-pairing.</p>
+  <p class="note"><strong>Pairing a new host:</strong> reset the ESP32 with the old host
+     off or out of range. After 3 unanswered page attempts the bridge becomes discoverable
+     automatically. Removing the bridge from the old host&rsquo;s device list causes an
+     immediate refusal and reaches discoverable mode faster.</p>
 
   <h2>Web Installer</h2>
   <p>

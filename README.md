@@ -129,8 +129,8 @@ The old controller must be offline (powered off or out of range) before pairing 
 
 The ESP32 is discoverable only during a boot session in which no Classic BT host has yet connected. To pair a new host:
 
-1. Make the old host forget the bridge (remove it from its Bluetooth device list) **or** ensure it is unreachable.
-2. Reset the ESP32.
+1. Ensure the old host is off or out of range, **or** make it forget the bridge (remove from its Bluetooth device list).
+2. Reset the ESP32. It pages the cached host up to 3 times; if the host does not respond it automatically becomes discoverable. Making the host forget the bridge triggers an immediate refusal, so discoverable mode is reached faster.
 3. On the new host, scan for Bluetooth devices and pair with the ESP32 as you would with any HID peripheral.
 
 ## Latency
