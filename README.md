@@ -176,6 +176,14 @@ Fwd latency us/100: min=NNN max=NNN avg=NNN
 
 This is useful to verify the forward task is waking on schedule and to detect Bluedroid BTC task stalls, which would show up as elevated `max` values.
 
+## Known Issues
+
+### Bogus analog stick position on host connect
+
+Occasionally, right after the Classic BT host connects, the host reports the analog sticks as not centered. The state corrects itself as soon as any control is used.
+
+**Workaround:** move the analog sticks briefly after connecting to the host.
+
 ## Architecture
 
 ```
