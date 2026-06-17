@@ -1114,8 +1114,8 @@ void app_main(void)
     /* Suppress noisy BT power-management log tags.
      * BT_HCI / BT_APPL emit W/E when the peer rejects sniff-mode (HCI 0x20 = LMP PDU Not Allowed),
      * which is normal for hosts that don't negotiate sniff. */
-    esp_log_level_set("BT_HCI",  ESP_LOG_ERROR);
-    esp_log_level_set("BT_APPL", ESP_LOG_NONE);
+    //esp_log_level_set("BT_HCI",  ESP_LOG_ERROR);
+    //esp_log_level_set("BT_APPL", ESP_LOG_NONE);
 
     ESP_LOGI(TAG, "Initializing BT stack (BTDM)");
     ESP_ERROR_CHECK(esp_hid_gap_init(HID_BRIDGE_MODE));

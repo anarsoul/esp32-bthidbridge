@@ -1,0 +1,26 @@
+Disable Bluedroid power-management sniff requests for the Classic BT HID
+device (HD) profile.
+
+By default Bluedroid's BTA DM PM layer issues HCI_Sniff_Mode on every
+"busy" event (i.e. every HID report sent) with a 0 ms delay, and again
+on "idle" and "conn open" after 5 s.  Linux accepts the sniff request;
+the resulting Sniff→Active round-trip takes ~40–50 ms, which dominates
+input latency.  Mac/Android reject the sniff request, so they don't
+suffer the same penalty.
+
+Zeroing the allowed-modes mask for the HD entry causes bta_dm_pm.c
+(line ~565: pm_action = allowed_modes & (PARK|SNIFF) & pref_modes) to
+evaluate to BTA_DM_PM_NO_ACTION for every event, so no sniff is ever
+requested.
+
+--- a/components/bt/host/bluedroid/bta/dm/bta_dm_cfg.c
++++ b/components/bt/host/bluedroid/bta/dm/bta_dm_cfg.c
+@@ -260,7 +260,7 @@
+
+     /* HD : 6 */
+     {
+-        (BTA_DM_PM_SNIFF | BTA_DM_PM_PARK),                            /* allow park & sniff */
++        BTA_DM_PM_NO_ACTION,                                           /* sniff disabled: bridge needs low latency */
+ #if (BTM_SSR_INCLUDED == TRUE)
+         (BTA_DM_PM_SSR3),                                              /* the SSR entry */
+ #endif
