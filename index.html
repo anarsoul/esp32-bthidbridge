@@ -51,10 +51,12 @@
   <ul>
     <li>Automatic BLE discovery; reconnects to the cached controller on every subsequent boot</li>
     <li>Classic BT device name mirrors the BLE controller name (e.g. <em>StadiaMXPB Classic</em>)</li>
-    <li>Low-latency HID forwarding — configurable rate cap (default 5 ms / 200 Hz)</li>
+    <li>Low-latency HID forwarding — 3 ms poll, 10 ms BLE connection interval; ~25 ms average end-to-end</li>
     <li>Latest-report-wins queue — stale stick positions are never forwarded</li>
+    <li>Output reports (rumble/haptics) forwarded from the Classic BT host back to the BLE controller</li>
+    <li>Battery level read from the BLE controller and exposed to the Classic BT host as a HID feature report</li>
     <li>Status LED with battery level indication</li>
-    <li>Works with BLE HID gamepads (keyboards and mice are untested — see README)</li>
+    <li>Works with BLE HID gamepads; keyboards and mice are unlikely to work correctly (the depth-1 queue drops key press/release events and mouse deltas)</li>
   </ul>
 
   <h2>Requirements</h2>
@@ -70,7 +72,8 @@
   <table>
     <tr><th>Pattern</th><th>Meaning</th></tr>
     <tr><td>Fast blink (100 ms)</td><td>Waiting for BLE controller</td></tr>
-    <tr><td>Slow blink (500 ms)</td><td>BLE connected, waiting for Classic BT host</td></tr>
+    <tr><td>Slow blink (500 ms)</td><td>BLE connected, paging cached Classic BT host</td></tr>
+    <tr><td>Short-long blink (100 ms / 500 ms)</td><td>BLE connected, discoverable &mdash; waiting for Classic BT host to pair</td></tr>
     <tr><td>Steady on</td><td>Both connected, battery &gt; 75%</td></tr>
     <tr><td>3 blinks every 5 s</td><td>Both connected, battery 51–75%</td></tr>
     <tr><td>2 blinks every 5 s</td><td>Both connected, battery 26–50%</td></tr>
@@ -93,25 +96,24 @@
      automatically. Removing the bridge from the old host&rsquo;s device list causes an
      immediate refusal and reaches discoverable mode faster.</p>
 
+  <h2>Latency</h2>
+  <p>Measured with a Stadia controller using
+     <a href="https://controllertest.io/latency-test">controllertest.io</a>:</p>
+  <table>
+    <tr><th>Setup</th><th>Average latency</th></tr>
+    <tr><td>Stadia controller &rarr; Mac (direct BLE)</td><td>~10 ms</td></tr>
+    <tr><td>Stadia controller &rarr; Bridge &rarr; Mac (Classic BT)</td><td>~25 ms</td></tr>
+  </table>
+  <p>The bridge forces the BLE connection interval to 10 ms (min&nbsp;=&nbsp;max = 8 &times; 1.25 ms)
+     and forwards reports via a 3 ms periodic poll. Additional latency may come from Classic BT
+     sniff mode negotiated by the host, which the bridge cannot control.</p>
+
   <h2>Web Installer</h2>
   <p>
     Before flashing, put the ESP32 into boot mode: hold <strong>BOOT</strong>, press and
     release <strong>RESET</strong>, then release <strong>BOOT</strong>.
   </p>
-  <p>Select a firmware variant, then click <strong>Install</strong>:</p>
-
-  <div class="variants">
-    <label>
-      <input type="radio" name="variant" value="manifest.json" checked>
-      Default (15 ms BLE connection interval)
-      <div class="desc">Recommended. Standard latency, lower power draw on the controller.</div>
-    </label>
-    <label>
-      <input type="radio" name="variant" value="manifest-10ms-ble.json">
-      Low latency (10 ms BLE connection interval)
-      <div class="desc">Slightly reduced BLE latency at the cost of higher controller battery drain.</div>
-    </label>
-  </div>
+  <p>Click <strong>Install</strong> to flash the latest firmware:</p>
 
   <esp-web-install-button id="install-btn" manifest="manifest.json"></esp-web-install-button>
 
@@ -121,12 +123,5 @@
     <a href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>.
   </p>
 
-  <script>
-    document.querySelectorAll('input[name="variant"]').forEach(function(r) {
-      r.addEventListener('change', function() {
-        document.getElementById('install-btn').setAttribute('manifest', r.value);
-      });
-    });
-  </script>
 </body>
 </html>
