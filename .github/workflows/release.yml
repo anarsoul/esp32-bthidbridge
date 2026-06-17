@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build firmware (default — 15 ms BLE interval)
+      - name: Build firmware
         shell: bash
         run: |
           . $IDF_PATH/export.sh
@@ -24,14 +24,6 @@ jobs:
           cp build/bootloader/bootloader.bin artifacts/
           cp build/partition_table/partition-table.bin artifacts/
           cp build/bthidbridge.bin artifacts/bthidbridge.bin
-
-      - name: Build firmware (10 ms BLE interval)
-        shell: bash
-        run: |
-          . $IDF_PATH/export.sh
-          sed -i 's/^CONFIG_BRIDGE_BLE_MAX_CONN_INTERVAL=.*/CONFIG_BRIDGE_BLE_MAX_CONN_INTERVAL=8/' sdkconfig
-          idf.py build
-          cp build/bthidbridge.bin artifacts/bthidbridge-10ms-ble.bin
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
@@ -58,39 +50,30 @@ jobs:
             firmware/bootloader.bin
             firmware/partition-table.bin
             firmware/bthidbridge.bin
-            firmware/bthidbridge-10ms-ble.bin
 
-      - name: Generate manifests and stage binaries
+      - name: Generate manifest and stage binaries
         run: |
           TAG=${{ github.ref_name }}
           VERSION=${TAG#v}
           cp firmware/bootloader.bin docs/
           cp firmware/partition-table.bin docs/
           cp firmware/bthidbridge.bin docs/
-          cp firmware/bthidbridge-10ms-ble.bin docs/
 
-          make_manifest() {
-            local app_bin="$1" out="$2"
-            jq -n \
-              --arg name "ESP32 BT HID Bridge" \
-              --arg version "$VERSION" \
-              --arg app "$app_bin" \
-              '{
-                name: $name,
-                version: $version,
-                builds: [{
-                  chipFamily: "ESP32",
-                  parts: [
-                    {path: "bootloader.bin",      offset: 4096},
-                    {path: "partition-table.bin",  offset: 32768},
-                    {path: $app,                   offset: 65536}
-                  ]
-                }]
-              }' > "docs/$out"
-          }
-
-          make_manifest bthidbridge.bin          manifest.json
-          make_manifest bthidbridge-10ms-ble.bin manifest-10ms-ble.json
+          jq -n \
+            --arg name "ESP32 BT HID Bridge" \
+            --arg version "$VERSION" \
+            '{
+              name: $name,
+              version: $version,
+              builds: [{
+                chipFamily: "ESP32",
+                parts: [
+                  {path: "bootloader.bin",     offset: 4096},
+                  {path: "partition-table.bin", offset: 32768},
+                  {path: "bthidbridge.bin",     offset: 65536}
+                ]
+              }]
+            }' > docs/manifest.json
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

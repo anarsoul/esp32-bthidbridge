@@ -1,7 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
+ * SPDX-License-Identifier: MIT
  *
  * BT HID Bridge: connects to a BLE HID controller and exposes it as a
  * Classic Bluetooth HID device, forwarding HID reports transparently.
@@ -36,15 +34,15 @@
 
 static const char *TAG = "BT_HID_BRIDGE";
 
-#define SCAN_DURATION_SECONDS 5
-#define MAX_REPORT_LEN        64
+#define SCAN_DURATION_SECONDS  5
+#define MAX_REPORT_LEN         64
+#define FORWARD_INTERVAL_MS    3
 
 #define NVS_NAMESPACE    "bthid_bridge"
 #define NVS_KEY_BLE_DEV  "ble_dev"
 #define NVS_KEY_BT_NAME  "bt_name"
 #define NVS_KEY_BT_HOST  "bt_host"
 #define BT_NAME_MAX_LEN  64
-#define FORWARD_INTERVAL_MS CONFIG_BRIDGE_FORWARD_INTERVAL_MS
 
 typedef struct {
     uint8_t bda[6];
@@ -680,7 +678,7 @@ static void start_classic_bt_hid(esp_hidh_dev_t *ble_dev)
     }
 }
 
-static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
+static void IRAM_ATTR ble_hidh_callback(void *handler_args, esp_event_base_t base,
                                int32_t id, void *event_data)
 {
     esp_hidh_event_t event = (esp_hidh_event_t)id;
@@ -697,8 +695,8 @@ static void ble_hidh_callback(void *handler_args, esp_event_base_t base,
 
             /* Default Bluedroid GATTC interval can be 50-100ms; request a tighter range. */
             esp_ble_conn_update_params_t conn_params = {
-                .min_int = 6,   /* 7.5ms */
-                .max_int = CONFIG_BRIDGE_BLE_MAX_CONN_INTERVAL,
+                .min_int = 8,   /* 10ms */
+                .max_int = 8,   /* 10ms */
                 .latency = 0,
                 .timeout = 400, /* 4s supervision timeout */
             };
@@ -832,9 +830,10 @@ static void latency_record(uint32_t us)
 }
 #endif
 
-static void hid_forward_task(void *pvParameters)
+static IRAM_ATTR void hid_forward_task(void *pvParameters)
 {
     hid_report_t report;
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(FORWARD_INTERVAL_MS));
         if (xQueueReceive(s_report_queue, &report, 0) != pdTRUE) continue;
@@ -1155,11 +1154,11 @@ void app_main(void)
 
     s_report_queue = xQueueCreate(1, sizeof(hid_report_t));
     s_rumble_queue = xQueueCreate(1, sizeof(hid_report_t));
-    xTaskCreate(hid_forward_task,    "hid_fwd",   4096, NULL, configMAX_PRIORITIES - 2, NULL);
-    xTaskCreate(rumble_forward_task, "rumble_fwd", 2048, NULL, configMAX_PRIORITIES - 2, NULL);
-    xTaskCreate(scan_task,           "scan",       6144, NULL, configMAX_PRIORITIES - 3, NULL);
-    xTaskCreate(bt_reconnect_task,   "bt_recon",   2048, NULL, configMAX_PRIORITIES - 3, NULL);
-    xTaskCreate(battery_poll_task,   "batt_poll",  2048, NULL, configMAX_PRIORITIES - 3, NULL);
+    xTaskCreatePinnedToCore(hid_forward_task,    "hid_fwd",   4096, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+    xTaskCreatePinnedToCore(rumble_forward_task, "rumble_fwd", 2048, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+    xTaskCreatePinnedToCore(scan_task,           "scan",       6144, NULL, configMAX_PRIORITIES - 3, NULL, 1);
+    xTaskCreatePinnedToCore(bt_reconnect_task,   "bt_recon",   2048, NULL, configMAX_PRIORITIES - 3, NULL, 1);
+    xTaskCreatePinnedToCore(battery_poll_task,   "batt_poll",  2048, NULL, configMAX_PRIORITIES - 3, NULL, 1);
 
 #if CONFIG_BRIDGE_LED_ENABLE
     gpio_config_t led_cfg = {
@@ -1171,7 +1170,7 @@ void app_main(void)
     };
     gpio_config(&led_cfg);
     gpio_set_level(CONFIG_BRIDGE_LED_GPIO, 0);
-    xTaskCreate(led_task, "led", 1024, NULL, configMAX_PRIORITIES - 4, NULL);
+    xTaskCreatePinnedToCore(led_task, "led", 1024, NULL, configMAX_PRIORITIES - 4, NULL, 1);
 #endif
 
     ESP_LOGI(TAG, "Bridge ready. Peer filter: \"%s\"",

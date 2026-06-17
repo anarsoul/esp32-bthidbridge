@@ -54,7 +54,6 @@ Stadia (BLE) ──GATT notify──► ble_hidh_callback (ESP_HIDH_INPUT_EVENT)
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| `BRIDGE_FORWARD_INTERVAL_MS` | 10 | Forward rate cap in ms. 10ms (100Hz) works with Tesla. |
 | `BRIDGE_LOG_AXES` | n | Enable to log LX/LY/RX/RY on every changed report — useful for debugging stuck sticks. |
 | `BRIDGE_PEER_DEVICE_NAME` | *(empty)* | Lock onto a specific BLE device by name. |
 | `BRIDGE_AUTO_RECONNECT` | y | Re-scan after BLE disconnect. |

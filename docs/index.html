@@ -51,7 +51,7 @@
   <ul>
     <li>Automatic BLE discovery; reconnects to the cached controller on every subsequent boot</li>
     <li>Classic BT device name mirrors the BLE controller name (e.g. <em>StadiaMXPB Classic</em>)</li>
-    <li>Low-latency HID forwarding — configurable rate cap (default 5 ms / 200 Hz)</li>
+    <li>Low-latency HID forwarding — event-driven, 7.5 ms BLE connection interval, ~15–17 ms average end-to-end</li>
     <li>Latest-report-wins queue — stale stick positions are never forwarded</li>
     <li>Status LED with battery level indication</li>
     <li>Works with BLE HID gamepads (keyboards and mice are untested — see README)</li>
@@ -94,25 +94,26 @@
      automatically. Removing the bridge from the old host&rsquo;s device list causes an
      immediate refusal and reaches discoverable mode faster.</p>
 
+  <h2>Latency</h2>
+  <p>Measured with a Stadia controller using
+     <a href="https://controllertest.io/latency-test">controllertest.io</a>:</p>
+  <table>
+    <tr><th>Setup</th><th>Average latency</th></tr>
+    <tr><td>Stadia controller &rarr; Mac (direct BLE)</td><td>~10 ms</td></tr>
+    <tr><td>Stadia controller &rarr; Bridge &rarr; Mac (Classic BT)</td><td>~15&ndash;17 ms</td></tr>
+  </table>
+  <p>The ~5&ndash;7 ms overhead is almost entirely the BLE connection interval. The bridge
+     forces the interval to 7.5 ms (min&nbsp;=&nbsp;max = 6 &times; 1.25 ms), and the
+     forward task wakes immediately when a report arrives &mdash; no artificial delay is
+     added. Additional latency may come from Classic BT sniff mode negotiated by the host,
+     which the bridge cannot control.</p>
+
   <h2>Web Installer</h2>
   <p>
     Before flashing, put the ESP32 into boot mode: hold <strong>BOOT</strong>, press and
     release <strong>RESET</strong>, then release <strong>BOOT</strong>.
   </p>
-  <p>Select a firmware variant, then click <strong>Install</strong>:</p>
-
-  <div class="variants">
-    <label>
-      <input type="radio" name="variant" value="manifest.json" checked>
-      Default (15 ms BLE connection interval)
-      <div class="desc">Recommended. Standard latency, lower power draw on the controller.</div>
-    </label>
-    <label>
-      <input type="radio" name="variant" value="manifest-10ms-ble.json">
-      Low latency (10 ms BLE connection interval)
-      <div class="desc">Slightly reduced BLE latency at the cost of higher controller battery drain.</div>
-    </label>
-  </div>
+  <p>Click <strong>Install</strong> to flash the latest firmware:</p>
 
   <esp-web-install-button id="install-btn" manifest="manifest.json"></esp-web-install-button>
 
@@ -122,12 +123,5 @@
     <a href="https://github.com/anarsoul/esp32-bthidbridge">GitHub</a>.
   </p>
 
-  <script>
-    document.querySelectorAll('input[name="variant"]').forEach(function(r) {
-      r.addEventListener('change', function() {
-        document.getElementById('install-btn').setAttribute('manifest', r.value);
-      });
-    });
-  </script>
 </body>
 </html>

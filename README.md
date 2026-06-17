@@ -14,9 +14,9 @@ Bridges a BLE HID gamepad to a Classic Bluetooth HID host. The ESP32 connects to
 - Caches the last connected BLE device in NVS — reconnects on boot without requiring pairing mode
 - Classic BT device name mirrors the BLE controller name (e.g. `StadiaMXPB-d2ea Classic`)
 - Name and BLE device address persist across reboots; updated automatically when a new controller is paired
-- Requests minimum BLE connection interval (7.5 ms) for lowest latency
-- HID reports forwarded via a dedicated task with configurable rate cap (default 5 ms / 200 Hz) to prevent BTA/L2CAP overflow on hosts that poll Classic BT infrequently
-- Latest-report-wins queue — if the BLE controller sends faster than the forward rate, only the most recent report is forwarded, avoiding stale stick positions
+- Forces BLE connection interval to 10 ms (min = max = 8 × 1.25 ms) — short enough for responsive input, long enough to reduce radio slot contention with Classic BT
+- HID reports forwarded by a 3 ms periodic poll — decouples BT Classic TX timing from BLE RX events to prevent Bluedroid BTC task queue overflow
+- Latest-report-wins depth-1 queue — if the BLE controller sends faster than the Classic BT host can consume, only the most recent report is forwarded, avoiding stale stick positions
 - Supports any BLE HID gamepad (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
 - Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller; slow blink = BLE connected, paging cached host; short-long blink = BLE connected, discoverable (waiting for new host to pair); steady = both connected; when fully connected, blinks every 5 s to show controller battery level: 1 blink = 0–25%, 2 blinks = 26–50%, 3 blinks = 51–75%, steady = above 75%
@@ -52,7 +52,6 @@ Relevant options are under **BT HID Bridge Configuration**:
 |--------|---------|-------------|
 | `BRIDGE_PEER_DEVICE_NAME` | *(empty)* | Connect only to a BLE device with this exact advertised name. Leave empty to connect to the first HID device found. |
 | `BRIDGE_BT_DEVICE_NAME` | `ESP32 HID Bridge` | Fallback Classic BT name used when the BLE device has no advertised name. |
-| `BRIDGE_FORWARD_INTERVAL_MS` | `5` | Minimum interval between HID report forwards to the Classic BT host (ms). Reports arriving faster are coalesced; only the latest is sent. 5 ms = 200 Hz. |
 | `BRIDGE_AUTO_RECONNECT` | enabled | Automatically restart scanning and reconnect after the BLE controller disconnects. |
 | `BRIDGE_LOG_AXES` | disabled | Log analog axis values (LX/LY/RX/RY) on every changed report. Useful for debugging stuck controls. |
 | `BRIDGE_LATENCY_MEASURE` | disabled | Log HID forwarding latency (min/max/avg over 100 reports) between BLE report receipt and Classic BT forwarding. |
@@ -136,45 +135,27 @@ The ESP32 is discoverable only during a boot session in which no Classic BT host
 
 ## Latency
 
-The bridge adds latency at two points in the HID report path.
+Measured with a Stadia controller using [controllertest.io](https://controllertest.io/latency-test):
 
-### BLE connection interval
+| Setup | Average latency |
+|-------|----------------|
+| Stadia controller → Mac (direct BLE) | ~10 ms |
+| Stadia controller → Bridge → Mac (Classic BT) | ~25 ms |
 
-The BLE radio can only receive a GATT notification at each connection event. A button press that occurs just after a connection event must wait up to one full interval before the report reaches the ESP32.
 
-| `BRIDGE_BLE_MAX_CONN_INTERVAL` | Interval | Worst case | Average |
-|-------------------------------|----------|-----------|---------|
-| 6 (minimum) | 7.5 ms | 7.5 ms | ~3.75 ms |
-| 8 | 10 ms | 10 ms | ~5 ms |
-| 12 (default) | 15 ms | 15 ms | ~7.5 ms |
+The Classic BT host may negotiate sniff mode on the connection, which adds latency in multiples of the sniff interval. This is outside the bridge's control and depends on the host.
 
-Note: the peripheral may negotiate a higher interval than requested if its firmware requires it.
-
-### Forward interval
-
-After a BLE report is received it is placed in a depth-1 queue. `hid_forward_task` wakes every `BRIDGE_FORWARD_INTERVAL_MS` (default 5 ms) and forwards the latest queued report to the Classic BT stack. A report received just after the task went back to sleep waits up to one full forward interval.
-
-### Combined worst-case latency
-
-| Source | Worst case | Average |
-|--------|-----------|---------|
-| BLE connection interval (default 15 ms) | 15 ms | ~7.5 ms |
-| Forward interval (default 5 ms) | 5 ms | ~2.5 ms |
-| **Bridge total** | **~20 ms** | **~10 ms** |
-
-The Classic BT host adds its own polling delay on top - this is outside the bridge's control and varies by host.
+Note: the controller may negotiate a higher BLE interval than requested if its firmware requires it.
 
 ### Measuring forwarding latency
 
-Enable `BRIDGE_LATENCY_MEASURE` in `idf.py menuconfig` to log the time between receiving a BLE report and the `esp_hidd_dev_input_set` call. This captures the forward interval delay; the BLE connection interval delay is not included as it occurs before the report arrives at the ESP32.
-
-Every 100 forwarded reports the serial monitor prints:
+Enable `BRIDGE_LATENCY_MEASURE` in `idf.py menuconfig` to log the time between receiving a BLE report and the `esp_hidd_dev_input_set` call. Every 100 forwarded reports the serial monitor prints:
 
 ```
 Fwd latency us/100: min=NNN max=NNN avg=NNN
 ```
 
-This is useful to verify the forward task is waking on schedule and to detect Bluedroid BTC task stalls, which would show up as elevated `max` values.
+Useful to verify there are no Bluedroid BTC task stalls, which show up as elevated `max` values.
 
 ## Known Issues
 
@@ -194,14 +175,20 @@ scan_task                               bt_hidd_callback
   esp_hidh_dev_open()  ──────────────►    DISCONNECT → restore discoverability
 
 ble_hidh_callback
-  OPEN  → request 7.5 ms BLE interval
+  OPEN  → request 10 ms BLE interval
          start_classic_bt_hid()
   INPUT → xQueueOverwrite(report) ──►  hid_forward_task
-  CLOSE → esp_hidd_dev_deinit()          sleep(FORWARD_INTERVAL_MS)
-                                         xQueueReceive() → esp_hidd_dev_input_set()
+                                         sleep(3 ms)
+  CLOSE → esp_hidd_dev_deinit()          xQueueReceive(0) → esp_hidd_dev_input_set()
 ```
 
-The HIDH event callback never blocks — it writes the latest report into a depth-1 queue via `xQueueOverwrite` and returns immediately. A dedicated `hid_forward_task` wakes every `FORWARD_INTERVAL_MS`, dequeues the most recent report, and calls `esp_hidd_dev_input_set`. This prevents the Bluedroid BTC task queue from backing up when the Classic BT host polls infrequently, which would otherwise cause BLE GATT notification queue overflow and dropped reports (resulting in analog sticks freezing at their last reported position).
+The HIDH event callback never blocks — it writes the latest report into a depth-1 queue via `xQueueOverwrite` and returns immediately. A dedicated `hid_forward_task` drains the queue and calls `esp_hidd_dev_input_set`. This prevents the Bluedroid BTC task queue from backing up when the Classic BT host polls infrequently, which would otherwise cause BLE GATT notification queue overflow and dropped reports (resulting in analog sticks freezing at their last reported position).
+
+**Why poll-based, not event-driven.** An event-driven design (`xQueueReceive` with `portMAX_DELAY`) forwards each report the instant it arrives, phase-locking BT Classic TX to BLE RX. Because both share Bluedroid's BTC task queue, back-to-back RX+TX operations saturate it and drop reports — the same freeze symptom. A fixed poll interval ensures the TX phase drifts relative to the BLE connection events so they are never consistently co-scheduled.
+
+**Why 3 ms poll interval.** The BLE connection interval is 10 ms. With a 3 ms poll, LCM(3, 10) = 30 ms, so the TX phase rotates through all ten possible 1 ms offsets within 30 ms — no two consecutive polls land at the same phase relative to a BLE connection event. 3 ms also bounds worst-case forwarding latency to 3 ms (average 1.5 ms), which is imperceptible.
+
+**Why 10 ms BLE interval.** A 7.5 ms interval (6 × 1.25 ms) increases BLE radio slot frequency, raising the probability that a BLE receive and a Classic BT transmit compete for the same radio window, causing BTC queue stalls and elevated `max` forwarding latency. 10 ms reduces that contention while keeping input latency acceptable.
 
 NVS namespace `bthid_bridge` stores:
 
