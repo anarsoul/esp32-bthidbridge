@@ -33,17 +33,40 @@ All application logic lives in `main/bridge_main.c`. `main/esp_hid_gap.c` / `.h`
 
 ### Data flow
 
+Input (controller → host):
 ```
-Stadia (BLE) ──GATT notify──► ble_hidh_callback (ESP_HIDH_INPUT_EVENT)
-                                   │ xQueueOverwrite  (non-blocking, depth-1)
-                                   ▼
-                              s_report_queue
-                                   │ xQueueReceive every FORWARD_INTERVAL_MS
-                                   ▼
-                              hid_forward_task
-                                   │ esp_hidd_dev_input_set()
-                                   ▼
-                              Classic BT HID host
+BLE controller ──GATT notify──► ble_hidh_callback (ESP_HIDH_INPUT_EVENT)
+                                     │ xQueueOverwrite  (non-blocking, depth-1)
+                                     ▼
+                                s_report_queue
+                                     │ xQueueReceive every FORWARD_INTERVAL_MS
+                                     ▼
+                                hid_forward_task
+                                     │ esp_hidd_dev_input_set()
+                                     ▼
+                                Classic BT HID host
+```
+
+Output (host → controller — rumble/haptics):
+```
+Classic BT host ──SET_REPORT──► bt_hidd_callback (ESP_HIDD_FEATURE_EVENT / OUTPUT_EVENT)
+                                     │ xQueueOverwrite (depth-1) or direct call
+                                     ▼
+                                s_rumble_queue  →  rumble_forward_task
+                                                        │ esp_hidh_dev_output_set()
+                                                        ▼
+                                                   BLE controller
+```
+
+Battery:
+```
+battery_poll_task (every 10 s) ──GATT read──► BLE Battery Service (0x180F / 0x2A19)
+                                                   │ bridge_gattc_event_handler intercepts result
+                                                   ▼
+                                              s_battery_level  ──► bt_hidd_callback (GET_REPORT)
+                                                                        │ esp_hidd_dev_feature_set()
+                                                                        ▼
+                                                                   Classic BT host
 ```
 
 ### Why the queue exists
@@ -54,9 +77,14 @@ Stadia (BLE) ──GATT notify──► ble_hidh_callback (ESP_HIDH_INPUT_EVENT)
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| `BRIDGE_LOG_AXES` | n | Enable to log LX/LY/RX/RY on every changed report — useful for debugging stuck sticks. |
+| `BRIDGE_SSP_ENABLED` | y | Secure Simple Pairing for Classic BT. Disable to fall back to legacy PIN. |
 | `BRIDGE_PEER_DEVICE_NAME` | *(empty)* | Lock onto a specific BLE device by name. |
+| `BRIDGE_BT_DEVICE_NAME` | `ESP32 HID Bridge` | Fallback Classic BT name when BLE device has no name. |
 | `BRIDGE_AUTO_RECONNECT` | y | Re-scan after BLE disconnect. |
+| `BRIDGE_LOG_AXES` | n | Enable to log LX/LY/RX/RY on every changed report — useful for debugging stuck sticks. |
+| `BRIDGE_LATENCY_MEASURE` | n | Log HID forwarding latency (min/max/avg over 100 reports). |
+| `BRIDGE_LED_ENABLE` | y | Enable the status LED. |
+| `BRIDGE_LED_GPIO` | 13 | GPIO pin for the status LED. |
 
 ### NVS persistence (`bthid_bridge` namespace)
 

@@ -17,6 +17,8 @@ Bridges a BLE HID gamepad to a Classic Bluetooth HID host. The ESP32 connects to
 - Forces BLE connection interval to 10 ms (min = max = 8 × 1.25 ms) — short enough for responsive input, long enough to reduce radio slot contention with Classic BT
 - HID reports forwarded by a 3 ms periodic poll — decouples BT Classic TX timing from BLE RX events to prevent Bluedroid BTC task queue overflow
 - Latest-report-wins depth-1 queue — if the BLE controller sends faster than the Classic BT host can consume, only the most recent report is forwarded, avoiding stale stick positions
+- Output reports (rumble/haptics) forwarded from the Classic BT host back to the BLE controller
+- Battery level read from the BLE controller and exposed to the Classic BT host as a HID feature report (Battery Strength, usage 0x06/0x20)
 - Supports any BLE HID gamepad (identified by HID service UUID or HID appearance value)
 - Optional BLE device name filter to lock onto a specific controller
 - Status LED (connect between GPIO13 and GND): fast blink = waiting for BLE controller; slow blink = BLE connected, paging cached host; short-long blink = BLE connected, discoverable (waiting for new host to pair); steady = both connected; when fully connected, blinks every 5 s to show controller battery level: 1 blink = 0–25%, 2 blinks = 26–50%, 3 blinks = 51–75%, steady = above 75%
@@ -179,7 +181,12 @@ ble_hidh_callback
          start_classic_bt_hid()
   INPUT → xQueueOverwrite(report) ──►  hid_forward_task
                                          sleep(3 ms)
-  CLOSE → esp_hidd_dev_deinit()          xQueueReceive(0) → esp_hidd_dev_input_set()
+  CLOSE → esp_bt_hid_device_disconnect() xQueueReceive(0) → esp_hidd_dev_input_set()
+
+bt_hidd_callback
+  OUTPUT → esp_hidh_dev_output_set()  ◄── Classic BT host (direct output reports)
+  FEATURE(output) → xQueueOverwrite(rumble) ◄── rumble_forward_task
+                                                   → esp_hidh_dev_output_set()
 ```
 
 The HIDH event callback never blocks — it writes the latest report into a depth-1 queue via `xQueueOverwrite` and returns immediately. A dedicated `hid_forward_task` drains the queue and calls `esp_hidd_dev_input_set`. This prevents the Bluedroid BTC task queue from backing up when the Classic BT host polls infrequently, which would otherwise cause BLE GATT notification queue overflow and dropped reports (resulting in analog sticks freezing at their last reported position).
@@ -196,3 +203,4 @@ NVS namespace `bthid_bridge` stores:
 |-----|---------|
 | `ble_dev` | Last BLE device address (6 bytes) and address type (1 byte) |
 | `bt_name` | Last Classic BT device name (`<BLE name> Classic`) |
+| `bt_host` | Last connected Classic BT host BDA (6 bytes) |
