@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- ESP-IDF patch (`patches/0001-bta-dm-disable-hid-device-sniff.patch`) that
+  zeros the HD profile's allowed-modes mask in `bta_dm_cfg.c`, preventing
+  Bluedroid from requesting sniff mode on every HID report sent to the host.
+- `scripts/apply_patches.sh`: idempotent patch apply script, run automatically
+  at CMake configure time via `CMakeLists.txt`.
+
+### Changed
+
+- BLE connection interval hardcoded to 10 ms (min = max = 8 × 1.25 ms);
+  `BRIDGE_BLE_MAX_CONN_INTERVAL` Kconfig option removed.
+- HID forward poll hardcoded to 3 ms; `BRIDGE_FORWARD_INTERVAL_MS` Kconfig
+  option removed. LCM(3, 10) = 30 ms ensures the TX phase rotates through all
+  BLE connection-event offsets, preventing consistent co-scheduling.
+- All bridge tasks pinned to core 1; HIDH callback and `hid_forward_task`
+  marked `IRAM_ATTR` to reduce ISR/scheduler jitter.
+- CPU frequency raised from 160 MHz to 240 MHz.
+- FreeRTOS tick rate raised from 200 Hz to 1 kHz.
+- `CONFIG_FREERTOS_IN_IRAM` enabled to keep the scheduler out of flash.
+- Release workflow no longer builds a separate 10 ms BLE interval variant;
+  the `bthidbridge-10ms-ble.bin` artifact is removed.
+
+### Fixed
+
+- Disabled Bluedroid sniff-mode requests for the HID device profile, reducing
+  Classic BT latency on Linux hosts from ~40–50 ms to ~20–25 ms. Mac and
+  Android were unaffected (they reject the sniff request); Linux accepted it,
+  incurring a ~40–50 ms Sniff→Active round-trip on every report.
+
 ## [0.0.5] - 2026-06-15
 
 ### Added
