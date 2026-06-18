@@ -36,7 +36,7 @@ static const char *TAG = "BT_HID_BRIDGE";
 
 #define SCAN_DURATION_SECONDS  5
 #define MAX_REPORT_LEN         64
-#define FORWARD_INTERVAL_MS    3
+#define FORWARD_INTERVAL_MS    5
 
 #define NVS_NAMESPACE    "bthid_bridge"
 #define NVS_KEY_BLE_DEV  "ble_dev"
@@ -695,8 +695,8 @@ static void IRAM_ATTR ble_hidh_callback(void *handler_args, esp_event_base_t bas
 
             /* Default Bluedroid GATTC interval can be 50-100ms; request a tighter range. */
             esp_ble_conn_update_params_t conn_params = {
-                .min_int = 8,   /* 10ms */
-                .max_int = 8,   /* 10ms */
+                .min_int = 12,   /* 15ms */
+                .max_int = 12,   /* 15ms */
                 .latency = 0,
                 .timeout = 400, /* 4s supervision timeout */
             };
