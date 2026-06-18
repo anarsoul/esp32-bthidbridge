@@ -81,6 +81,7 @@ static volatile bool      s_host_connected_this_boot       = false;
 static int                s_page_attempt_count             = 0; /* pairing mode: outgoing page attempts made */
 static portMUX_TYPE       s_page_count_mux                 = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool      s_bt_discoverable                = false;
+static volatile bool      s_pending_set_report_ack         = false;
 static esp_hid_raw_report_map_t *s_report_maps   = NULL;
 static size_t             s_report_maps_len       = 0;
 #if CONFIG_BRIDGE_LOG_AXES
@@ -427,6 +428,7 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
         }
         break;
     case ESP_HIDD_DISCONNECT_EVENT: {
+        s_pending_set_report_ack = false;
         taskENTER_CRITICAL(&s_bt_state_mux);
         bool was_connecting = (s_bt_state == BT_STATE_CONNECTING);
         s_bt_state = BT_STATE_IDLE;
@@ -471,9 +473,12 @@ static void bt_hidd_callback(void *handler_args, esp_event_base_t base,
     }
     case ESP_HIDD_FEATURE_EVENT:
         /* bt_hidd.c never acknowledges SET_REPORT on the success path, so the host
-         * waits 3-4 s for a handshake timeout before retrying. Send it here. */
+         * waits 3-4 s for a handshake timeout before retrying. Send it here.
+         * If L2CAP is congested (HID_ERR_CONGESTED=8), flag for retry from rumble_forward_task. */
         if (param->feature.trans_type == ESP_HID_TRANS_SET_REPORT) {
-            esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_SUCCESS);
+            if (esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_SUCCESS) != ESP_OK) {
+                s_pending_set_report_ack = true;
+            }
         }
         if (param->feature.trans_type == ESP_HID_TRANS_GET_REPORT
                 && s_battery_report_id != 0
@@ -853,13 +858,20 @@ static void rumble_forward_task(void *pvParameters)
 {
     hid_report_t rumble;
     while (1) {
-        if (xQueueReceive(s_rumble_queue, &rumble, portMAX_DELAY) != pdTRUE) continue;
-        esp_hidh_dev_t *ble_dev = s_ble_hidh_dev;
-        if (!ble_dev || !esp_hidh_dev_exists(ble_dev)) continue;
-        esp_err_t err = esp_hidh_dev_output_set(ble_dev, rumble.map_index,
-                                                 rumble.report_id, rumble.data, rumble.len);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "rumble forward failed: id=%u err=0x%x", rumble.report_id, err);
+        if (xQueueReceive(s_rumble_queue, &rumble, pdMS_TO_TICKS(50)) == pdTRUE) {
+            esp_hidh_dev_t *ble_dev = s_ble_hidh_dev;
+            if (ble_dev && esp_hidh_dev_exists(ble_dev)) {
+                esp_err_t err = esp_hidh_dev_output_set(ble_dev, rumble.map_index,
+                                                         rumble.report_id, rumble.data, rumble.len);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "rumble forward failed: id=%u err=0x%x", rumble.report_id, err);
+                }
+            }
+        }
+        if (s_pending_set_report_ack && s_bt_state == BT_STATE_CONNECTED) {
+            if (esp_bt_hid_device_report_error(ESP_HID_PAR_HANDSHAKE_RSP_SUCCESS) == ESP_OK) {
+                s_pending_set_report_ack = false;
+            }
         }
     }
 }
