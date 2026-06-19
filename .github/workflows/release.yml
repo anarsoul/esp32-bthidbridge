@@ -23,11 +23,18 @@ jobs:
         shell: bash
         run: |
           . $IDF_PATH/export.sh
+
+          # Default build (WROOM/WROVER, LED on GPIO 13)
           idf.py build
           mkdir -p artifacts
           cp build/bootloader/bootloader.bin artifacts/
           cp build/partition_table/partition-table.bin artifacts/
           cp build/bthidbridge.bin artifacts/bthidbridge.bin
+
+          # D1 mini build (built-in blue LED on GPIO 2)
+          sed -i 's/^CONFIG_BRIDGE_LED_GPIO=13$/CONFIG_BRIDGE_LED_GPIO=2/' sdkconfig
+          idf.py -B build_d1mini build
+          cp build_d1mini/bthidbridge.bin artifacts/bthidbridge-d1mini.bin
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
@@ -54,14 +61,16 @@ jobs:
             firmware/bootloader.bin
             firmware/partition-table.bin
             firmware/bthidbridge.bin
+            firmware/bthidbridge-d1mini.bin
 
-      - name: Generate manifest and stage binaries
+      - name: Generate manifests and stage binaries
         run: |
           TAG=${{ github.ref_name }}
           VERSION=${TAG#v}
           cp firmware/bootloader.bin docs/
           cp firmware/partition-table.bin docs/
           cp firmware/bthidbridge.bin docs/
+          cp firmware/bthidbridge-d1mini.bin docs/
 
           jq -n \
             --arg name "ESP32 BT HID Bridge" \
@@ -78,6 +87,22 @@ jobs:
                 ]
               }]
             }' > docs/manifest.json
+
+          jq -n \
+            --arg name "ESP32 BT HID Bridge (D1 mini)" \
+            --arg version "$VERSION" \
+            '{
+              name: $name,
+              version: $version,
+              builds: [{
+                chipFamily: "ESP32",
+                parts: [
+                  {path: "bootloader.bin",        offset: 4096},
+                  {path: "partition-table.bin",    offset: 32768},
+                  {path: "bthidbridge-d1mini.bin", offset: 65536}
+                ]
+              }]
+            }' > docs/manifest-d1mini.json
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

@@ -25,7 +25,7 @@ Bridges a BLE HID gamepad to a Classic Bluetooth HID host. The ESP32 connects to
 
 ## Requirements
 
-- **Hardware**: ESP32 with dual-mode Bluetooth (WROOM, WROVER, or equivalent). Classic Bluetooth is only available on the original ESP32. Note: ESP32-S3, C3, C6, H2 are not supported.
+- **Hardware**: ESP32 with dual-mode Bluetooth (WROOM, WROVER, D1 mini, or equivalent). Classic Bluetooth is only available on the original ESP32. Note: ESP32-S3, C3, C6, H2 are not supported.
 - **Toolchain**: ESP-IDF v6.0.1
 
 ## Setup
@@ -87,7 +87,10 @@ Press `Ctrl-]` to exit the monitor.
 
 ### Web flasher
 
-The easiest way to flash the ESP32 is via the [web installer](https://anarsoul.github.io/esp32-bthidbridge/) in Chrome — no toolchain required.
+The easiest way to flash the ESP32 is via the [web installer](https://anarsoul.github.io/esp32-bthidbridge/) in Chrome — no toolchain required. The installer lets you choose between two pre-built variants:
+
+- **WROOM / WROVER** — status LED on GPIO 13 (external LED required)
+- **D1 mini** — uses the built-in blue LED on GPIO 2
 
 Before flashing, put the ESP32 into boot mode: press and hold the **BOOT** button, press and release **RESET**, then release **BOOT**.
 
@@ -109,7 +112,7 @@ After the first successful pairing, both connections are cached:
 
 ### Status LED
 
-Connect an LED with a series resistor between GPIO13 and GND. The LED indicates the current connection state:
+Connect an LED with a series resistor between the LED GPIO pin and GND (GPIO 13 on WROOM/WROVER; GPIO 2 on D1 mini uses the built-in blue LED). The LED indicates the current connection state:
 
 | Pattern | Meaning |
 |---------|---------|
