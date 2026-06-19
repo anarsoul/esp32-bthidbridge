@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-06-18
+
+### Added
+
+- ESP32 D1 mini build variant (`bthidbridge-d1mini.bin`, LED on GPIO 2 — built-in
+  blue LED). CI now builds and publishes both the default (GPIO 13) and D1 mini
+  variants as release assets; the web installer exposes a board selector to switch
+  between the two manifests.
+
+### Changed
+
+- Web installer title and heading updated to the full project name "ESP32 BLE HID to
+  Bluetooth Classic Bridge"; firmware version is now displayed dynamically in the
+  heading, fetched at page-load time from `manifest.json`.
+- "Pairing a new host" note promoted to a proper `<h2>` section in the web installer.
+- `docs/manifest.json` added for local development (points at local build directory;
+  overwritten by CI at release time with the correct version and GitHub Pages paths).
+
 ## [0.0.7] - 2026-06-18
 
 ### Changed
@@ -154,7 +172,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Default `BRIDGE_FORWARD_INTERVAL_MS` set to 10 ms (100 Hz).
 - CPU frequency set to 160 MHz.
 
-[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/anarsoul/esp32-bthidbridge/compare/v0.0.4...v0.0.5
