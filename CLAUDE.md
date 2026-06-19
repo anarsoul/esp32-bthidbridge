@@ -51,9 +51,12 @@ Output (host → controller — rumble/haptics):
 ```
 Classic BT host ──SET_REPORT──► bt_hidd_callback (ESP_HIDD_FEATURE_EVENT / OUTPUT_EVENT)
                                      │ xQueueOverwrite (depth-1) or direct call
+                                     │ esp_bt_hid_device_report_error() → ACK handshake
+                                     │   if congested: s_pending_set_report_ack = true
                                      ▼
-                                s_rumble_queue  →  rumble_forward_task
+                                s_rumble_queue  →  rumble_forward_task (50 ms poll)
                                                         │ esp_hidh_dev_output_set()
+                                                        │ retries ACK if s_pending_set_report_ack
                                                         ▼
                                                    BLE controller
 ```
@@ -68,6 +71,16 @@ battery_poll_task (every 10 s) ──GATT read──► BLE Battery Service (0x1
                                                                         ▼
                                                                    Classic BT host
 ```
+
+### Hardcoded timing constants
+
+| Constant | Value | Notes |
+|----------|-------|-------|
+| BLE connection interval | 15 ms (12 × 1.25 ms) | Set via `esp_ble_conn_update_params_t` on BLE open |
+| `FORWARD_INTERVAL_MS` | 5 ms | `hid_forward_task` poll period; LCM(5, 15) = 15 ms rotates TX phase |
+| FreeRTOS tick rate | 200 Hz | `CONFIG_FREERTOS_HZ` in `sdkconfig.defaults` |
+
+These are **not** configurable via Kconfig — they are `#define` / `sdkconfig.defaults` values.
 
 ### Why the queue exists
 

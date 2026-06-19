@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- BLE connection interval relaxed from 10 ms (8 × 1.25 ms) to 15 ms (12 × 1.25 ms);
+  measured latency on Linux host is unchanged.
+- HID forward poll interval relaxed from 3 ms to 5 ms.
+- FreeRTOS tick rate lowered from 1 kHz to 200 Hz to reduce CPU overhead.
+
+### Fixed
+
+- SET_REPORT handshake ACK is now retried on a 50 ms poll from `rumble_forward_task`
+  when `esp_bt_hid_device_report_error()` fails (e.g. L2CAP congested), instead of
+  leaving the host waiting for a 3–4 s timeout. The pending flag is cleared on BT
+  disconnect to prevent a stale retry.
+
 ## [0.0.6] - 2026-06-16
 
 ### Added

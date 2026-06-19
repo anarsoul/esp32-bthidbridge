@@ -14,8 +14,8 @@ Bridges a BLE HID gamepad to a Classic Bluetooth HID host. The ESP32 connects to
 - Caches the last connected BLE device in NVS — reconnects on boot without requiring pairing mode
 - Classic BT device name mirrors the BLE controller name (e.g. `StadiaMXPB-d2ea Classic`)
 - Name and BLE device address persist across reboots; updated automatically when a new controller is paired
-- Forces BLE connection interval to 10 ms (min = max = 8 × 1.25 ms) — short enough for responsive input, long enough to reduce radio slot contention with Classic BT
-- HID reports forwarded by a 3 ms periodic poll — decouples BT Classic TX timing from BLE RX events to prevent Bluedroid BTC task queue overflow
+- Forces BLE connection interval to 15 ms (min = max = 12 × 1.25 ms) — short enough for responsive input, long enough to reduce radio slot contention with Classic BT
+- HID reports forwarded by a 5 ms periodic poll — decouples BT Classic TX timing from BLE RX events to prevent Bluedroid BTC task queue overflow
 - Latest-report-wins depth-1 queue — if the BLE controller sends faster than the Classic BT host can consume, only the most recent report is forwarded, avoiding stale stick positions
 - Output reports (rumble/haptics) forwarded from the Classic BT host back to the BLE controller
 - Battery level read from the BLE controller and exposed to the Classic BT host as a HID feature report (Battery Strength, usage 0x06/0x20)
@@ -177,10 +177,10 @@ scan_task                               bt_hidd_callback
   esp_hidh_dev_open()  ──────────────►    DISCONNECT → restore discoverability
 
 ble_hidh_callback
-  OPEN  → request 10 ms BLE interval
+  OPEN  → request 15 ms BLE interval
          start_classic_bt_hid()
   INPUT → xQueueOverwrite(report) ──►  hid_forward_task
-                                         sleep(3 ms)
+                                         sleep(5 ms)
   CLOSE → esp_bt_hid_device_disconnect() xQueueReceive(0) → esp_hidd_dev_input_set()
 
 bt_hidd_callback
@@ -193,9 +193,9 @@ The HIDH event callback never blocks — it writes the latest report into a dept
 
 **Why poll-based, not event-driven.** An event-driven design (`xQueueReceive` with `portMAX_DELAY`) forwards each report the instant it arrives, phase-locking BT Classic TX to BLE RX. Because both share Bluedroid's BTC task queue, back-to-back RX+TX operations saturate it and drop reports — the same freeze symptom. A fixed poll interval ensures the TX phase drifts relative to the BLE connection events so they are never consistently co-scheduled.
 
-**Why 3 ms poll interval.** The BLE connection interval is 10 ms. With a 3 ms poll, LCM(3, 10) = 30 ms, so the TX phase rotates through all ten possible 1 ms offsets within 30 ms — no two consecutive polls land at the same phase relative to a BLE connection event. 3 ms also bounds worst-case forwarding latency to 3 ms (average 1.5 ms), which is imperceptible.
+**Why 5 ms poll interval.** The BLE connection interval is 15 ms. With a 5 ms poll, LCM(5, 15) = 15 ms, so the TX phase rotates through all three possible 5 ms offsets within one BLE interval — consecutive polls never land at the same phase relative to a BLE connection event. 5 ms bounds worst-case forwarding latency to 5 ms (average 2.5 ms), which is imperceptible.
 
-**Why 10 ms BLE interval.** A 7.5 ms interval (6 × 1.25 ms) increases BLE radio slot frequency, raising the probability that a BLE receive and a Classic BT transmit compete for the same radio window, causing BTC queue stalls and elevated `max` forwarding latency. 10 ms reduces that contention while keeping input latency acceptable.
+**Why 15 ms BLE interval.** A shorter interval (e.g. 10 ms / 8 × 1.25 ms) increases BLE radio slot frequency, raising the probability that a BLE receive and a Classic BT transmit compete for the same radio window, causing BTC queue stalls and elevated `max` forwarding latency. 15 ms reduces that contention with no measurable change in end-to-end latency on Linux hosts.
 
 NVS namespace `bthid_bridge` stores:
 
