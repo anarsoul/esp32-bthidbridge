@@ -1,5 +1,5 @@
 {
-  "name": "ESP32 BT HID Bridge",
+  "name": "ESP32 BT HID Bridge (D1 mini)",
   "version": "0.0.8",
   "builds": [
     {
@@ -14,7 +14,7 @@
           "offset": 32768
         },
         {
-          "path": "bthidbridge.bin",
+          "path": "bthidbridge-d1mini.bin",
           "offset": 65536
         }
       ]

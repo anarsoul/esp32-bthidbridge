@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESP32 BT HID Bridge — Web Installer</title>
+  <title>ESP32 BLE HID to Bluetooth Classic Bridge — Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools/dist/web/install-button.js?module"></script>
   <style>
     body {
@@ -38,7 +38,7 @@
   </style>
 </head>
 <body>
-  <h1>ESP32 BT HID Bridge</h1>
+  <h1>ESP32 BLE HID to Bluetooth Classic Bridge &mdash; <span id="fw-version"></span></h1>
   <p class="subtitle">
     Bridges a BLE HID gamepad to a Classic Bluetooth host such as a car head unit,
     PC, or gaming console. &mdash;
@@ -68,7 +68,9 @@
   </ul>
 
   <h2>Status LED</h2>
-  <p>Connect an LED with a series resistor between GPIO&nbsp;13 and GND.</p>
+  <p>Connect an LED with a series resistor between the LED GPIO pin and GND.
+     The default firmware uses GPIO&nbsp;13 (WROOM/WROVER); the D1&nbsp;mini build uses
+     the built-in blue LED on GPIO&nbsp;2.</p>
   <table>
     <tr><th>Pattern</th><th>Meaning</th></tr>
     <tr><td>Fast blink (100 ms)</td><td>Waiting for BLE controller</td></tr>
@@ -91,7 +93,8 @@
   </ol>
   <p>Both connections are cached in flash — on subsequent boots the ESP32 reconnects to
      the known controller and host without re-pairing.</p>
-  <p class="note"><strong>Pairing a new host:</strong> reset the ESP32 with the old host
+  <h2>Pairing a new host</h2>
+  <p>Reset the ESP32 with the old host
      off or out of range. After 3 unanswered page attempts the bridge becomes discoverable
      automatically. Removing the bridge from the old host&rsquo;s device list causes an
      immediate refusal and reaches discoverable mode faster.</p>
@@ -113,9 +116,39 @@
     Before flashing, put the ESP32 into boot mode: hold <strong>BOOT</strong>, press and
     release <strong>RESET</strong>, then release <strong>BOOT</strong>.
   </p>
-  <p>Click <strong>Install</strong> to flash the latest firmware:</p>
+  <p>Select your board, then click <strong>Install</strong>:</p>
+
+  <div class="variants">
+    <label>
+      <input type="radio" name="variant" value="manifest.json" checked>
+      ESP32 WROOM / WROVER &mdash; status LED on GPIO&nbsp;13
+      <span class="desc">Connect an external LED with a series resistor between GPIO&nbsp;13 and GND.</span>
+    </label>
+    <label>
+      <input type="radio" name="variant" value="manifest-d1mini.json">
+      ESP32 D1&nbsp;mini &mdash; built-in blue LED (GPIO&nbsp;2)
+      <span class="desc">Uses the onboard blue LED; no external LED required.</span>
+    </label>
+  </div>
 
   <esp-web-install-button id="install-btn" manifest="manifest.json"></esp-web-install-button>
+
+  <script>
+    document.querySelectorAll('input[name="variant"]').forEach(function(radio) {
+      radio.addEventListener('change', function() {
+        document.getElementById('install-btn').setAttribute('manifest', this.value);
+      });
+    });
+
+    fetch('manifest.json')
+      .then(function(r) { return r.json(); })
+      .then(function(m) {
+        if (m.version) {
+          document.getElementById('fw-version').textContent = 'v' + m.version;
+        }
+      })
+      .catch(function() {});
+  </script>
 
   <p class="note">
     Requires Chrome or Edge on desktop. Does not work on Firefox or mobile browsers.<br>
