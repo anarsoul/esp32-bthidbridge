@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESP32 BT HID Bridge — Web Installer</title>
+  <title>ESP32 BLE HID to Bluetooth Classic Bridge — Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools/dist/web/install-button.js?module"></script>
   <style>
     body {
@@ -38,7 +38,7 @@
   </style>
 </head>
 <body>
-  <h1>ESP32 BT HID Bridge</h1>
+  <h1>ESP32 BLE HID to Bluetooth Classic Bridge &mdash; <span id="fw-version"></span></h1>
   <p class="subtitle">
     Bridges a BLE HID gamepad to a Classic Bluetooth host such as a car head unit,
     PC, or gaming console. &mdash;
@@ -93,7 +93,8 @@
   </ol>
   <p>Both connections are cached in flash — on subsequent boots the ESP32 reconnects to
      the known controller and host without re-pairing.</p>
-  <p class="note"><strong>Pairing a new host:</strong> reset the ESP32 with the old host
+  <h2>Pairing a new host</h2>
+  <p>Reset the ESP32 with the old host
      off or out of range. After 3 unanswered page attempts the bridge becomes discoverable
      automatically. Removing the bridge from the old host&rsquo;s device list causes an
      immediate refusal and reaches discoverable mode faster.</p>
@@ -138,6 +139,15 @@
         document.getElementById('install-btn').setAttribute('manifest', this.value);
       });
     });
+
+    fetch('manifest.json')
+      .then(function(r) { return r.json(); })
+      .then(function(m) {
+        if (m.version) {
+          document.getElementById('fw-version').textContent = 'v' + m.version;
+        }
+      })
+      .catch(function() {});
   </script>
 
   <p class="note">

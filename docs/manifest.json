@@ -1,0 +1,12 @@
+{
+  "name": "ESP32 BT HID Bridge",
+  "version": "dev",
+  "builds": [{
+    "chipFamily": "ESP32",
+    "parts": [
+      {"path": "../build/bootloader/bootloader.bin",      "offset": 4096},
+      {"path": "../build/partition_table/partition-table.bin", "offset": 32768},
+      {"path": "../build/bthidbridge.bin",                "offset": 65536}
+    ]
+  }]
+}
