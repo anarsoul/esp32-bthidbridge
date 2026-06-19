@@ -1,6 +1,6 @@
 {
   "name": "ESP32 BT HID Bridge",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "builds": [
     {
       "chipFamily": "ESP32",
